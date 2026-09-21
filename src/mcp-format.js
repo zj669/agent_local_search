@@ -291,9 +291,9 @@ function graphMap(result, dump, identifiers, hits, fileCap) {
   const query = result.query ?? "";
   const scale =
     dump.symbolCount != null && dump.fileCount != null
-      ? `${dump.symbolCount} symbols in ${dump.fileCount} file${
-          dump.fileCount === 1 ? "" : "s"
-        }`
+      ? `${dump.symbolCount} symbol${
+          dump.symbolCount === 1 ? "" : "s"
+        } in ${dump.fileCount} file${dump.fileCount === 1 ? "" : "s"}`
       : `${dump.files.length} file${dump.files.length === 1 ? "" : "s"}`;
 
   if (hits.length > 0) {
@@ -443,8 +443,8 @@ function formatGraph(result, full) {
   lines.push(
     "",
     sourceFiles > 0
-      ? `no source in this map. detail:"full" returns source for these ${sourceFiles} file${
-          sourceFiles === 1 ? "" : "s"
+      ? `no source in this map. detail:"full" returns source for ${
+          sourceFiles === 1 ? "this 1 file" : `these ${sourceFiles} files`
         } (~${Math.round(dumpSize / 1024)} KB), target file first.`
       : 'no source in this map. detail:"full" returns the engine output for this query.',
   );
