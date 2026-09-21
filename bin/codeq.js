@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 
 import { queryDaemon } from "../src/client.js";
-import { rootOrigin } from "../src/mcp-format.js";
+import { formatMcpToolResult, rootOrigin } from "../src/mcp-format.js";
 import { runMcpServer } from "../src/mcp.js";
 
 const USAGE = `Usage:
-  codeq [--root PATH] [--json] find  <query>   [--path PATH] [--limit N]
-  codeq [--root PATH] [--json] grep  <pattern> [--path PATH] [--glob GLOB] [--context N] [--limit N]
-  codeq [--root PATH] [--json] graph <query>   [--path PATH]
-  codeq mcp`;
+  codeq [--root PATH] [--json|--full] find  <query>   [--path PATH] [--limit N]
+  codeq [--root PATH] [--json|--full] grep  <pattern> [--path PATH] [--glob GLOB] [--context N] [--limit N] [--fuzzy]
+  codeq [--root PATH] [--json|--full] graph <query>   [--path PATH]
+  codeq mcp
+
+Human output is the same layer 0 map the MCP tools return: the resolved root on
+stderr, then the files to open next. --full adds layer 1 (graph source, grep
+context). --json stays the complete machine result and is unaffected by layers.`;
 
 const MCP_USAGE = `Usage:
   codeq mcp
@@ -53,6 +57,7 @@ function parseArguments(argv) {
     cwd: process.cwd(),
     cwdSource: "shell cwd",
     json: false,
+    full: false,
   };
   const positionals = [];
   const takesValue = new Set([
@@ -68,6 +73,15 @@ function parseArguments(argv) {
     const arg = argv[index];
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+    if (arg === "--full") {
+      options.full = true;
+      continue;
+    }
+    if (arg === "--fuzzy") {
+      if (command !== "grep") fail("--fuzzy is not valid for " + command);
+      options.fuzzy = true;
       continue;
     }
     if (takesValue.has(arg)) {
@@ -112,40 +126,24 @@ function printStatus(result) {
   const origin = rootOrigin(result);
   const via = origin ? ` via ${origin}` : "";
   const note = result.rootNote ? ` (${result.rootNote})` : "";
-  process.stderr.write(`[${result.status}] root ${result.root}${via}${note}${sync}\n`);
+  const fuzzy = result.mode === "fuzzy" ? "[fuzzy]" : "";
+  process.stderr.write(
+    `[${result.status}]${fuzzy} root ${result.root}${via}${note}${sync}\n`,
+  );
   if (result.warning) process.stderr.write(`warning: ${result.warning}\n`);
 }
 
-function printHuman(command, result) {
+function printHuman(command, result, full) {
   printStatus(result);
-  if (command === "find") {
-    for (const item of result.results) process.stdout.write(`${item.path}\n`);
-    process.stderr.write(`${result.total} file match(es)\n`);
-    return;
-  }
-  if (command === "grep") {
-    if (result.fuzzyFallback) {
-      process.stderr.write("warning: 0 exact matches; showing fuzzy matches\n");
-    }
-    for (const item of result.results) {
-      for (let i = 0; i < item.contextBefore.length; i += 1) {
-        const line = item.line - item.contextBefore.length + i;
-        process.stdout.write(`${item.path}-${line}- ${item.contextBefore[i]}\n`);
-      }
-      process.stdout.write(`${item.path}:${item.line}:${item.column}: ${item.text}\n`);
-      for (let i = 0; i < item.contextAfter.length; i += 1) {
-        process.stdout.write(`${item.path}-${item.line + i + 1}- ${item.contextAfter[i]}\n`);
-      }
-    }
-    process.stderr.write(`${result.total} text match(es)\n`);
-    return;
-  }
-  process.stdout.write(`${result.result.trimEnd()}\n`);
+  const formatted = formatMcpToolResult(command, result, {
+    detail: full ? "full" : "summary",
+  });
+  process.stdout.write(`${formatted.map}\n`);
 }
 
 async function runCli(argv) {
   const request = parseArguments(argv);
-  const { json, ...wireRequest } = request;
+  const { json, full, ...wireRequest } = request;
   const controller = new AbortController();
   const cancel = () => {
     controller.abort();
@@ -167,7 +165,7 @@ async function runCli(argv) {
       `${JSON.stringify({ command: request.command, ...result }, null, 2)}\n`,
     );
   } else {
-    printHuman(request.command, result);
+    printHuman(request.command, result, full);
   }
 }
 
