@@ -16,16 +16,20 @@ Node.js `>=22.5 <25` is required.
 Install from GitHub (works today):
 
 ```bash
-npm install -g github:zj669/agent_local_search
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/main.tar.gz
 ```
 
 Run the same command to update to the latest version from GitHub:
 
 ```bash
-npm install -g github:zj669/agent_local_search
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/main.tar.gz
 ```
 
-To pin the current release, add `#v0.1.0` to either GitHub command.
+To pin the current release instead:
+
+```bash
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.1.0.tar.gz
+```
 
 Uninstall:
 
