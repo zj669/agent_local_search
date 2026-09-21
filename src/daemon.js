@@ -101,6 +101,7 @@ async function execute(request, socket) {
         glob: request.glob,
         context: request.context ?? 0,
         limit: request.limit ?? 50,
+        fuzzy: Boolean(request.fuzzy),
       });
     }
     if (request.command === "graph") {
