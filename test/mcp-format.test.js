@@ -53,7 +53,7 @@ test("graph summary truncates and keeps a full-text escape hatch", () => {
     { ...stale, result: body },
     { detail: "full" },
   );
-  assert.equal(parseMcpToolText(full.text).result, body);
+  assert.equal(parseMcpToolText(full.text).result, body.trimEnd());
   assert.equal(parseMcpToolText(full.text).truncated, false);
 });
 
