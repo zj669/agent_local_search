@@ -18,13 +18,13 @@ const ROOTS_LIST_TIMEOUT_MS = 5_000;
 const PATH_PROPERTY = {
   type: "string",
   description:
-    "Optional path constraint relative to the session cwd. Workspace-relative paths stay on the current root; absolute, ~/, and ../ paths that leave the workspace switch to that repository. Each call uses exactly one root.",
+    "Optional path constraint relative to the session cwd, for narrowing inside one repository, for example src/ or mr_review_service. Workspace-relative paths stay on the current root; absolute, ~/, and ../ paths that leave the workspace switch to that repository. To switch repositories, prefer root. Each call uses exactly one root.",
 };
 
 const ROOT_PROPERTY = {
   type: "string",
   description:
-    "Optional explicit index root. Overrides Git/cwd detection for this call.",
+    "Absolute index root for this call only, overriding Git/cwd detection. Pass it whenever the repository you are asking about is not the session cwd: a second clone, another checkout or worktree, or any repository when the server was spawned from $HOME. Omitting it silently searches the session cwd, which is the wrong tree when your question is about another repository. Every reply names the resolved root and where it came from; if that root is not the repository you meant, retry with root.",
 };
 
 export const NO_WORKSPACE_ERROR =
@@ -46,7 +46,7 @@ const DETAIL_PROPERTY = {
   type: "string",
   enum: ["summary", "full"],
   description:
-    'summary (default) returns freshness, a short summary, and paths. full returns complete match text or the full graph dump.',
+    'summary (default) returns freshness, the resolved root, a short summary, and paths — enough to choose files to open. Pass full only when you need the complete match text or the full graph dump; when a summary reports truncated, the rest is only available through full.',
 };
 
 const TOOLS = [
@@ -86,7 +86,8 @@ const TOOLS = [
       properties: {
         pattern: {
           type: "string",
-          description: "Text or regex pattern to search for",
+          description:
+            "One identifier or one regex, for example focus_item_sources or reply_.*_actor. Regex is auto-detected, so no mode flag is needed. Search one name per call instead of an or-chain of unrelated names.",
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
@@ -115,14 +116,14 @@ const TOOLS = [
     name: "graph",
     title: "Explore the code graph",
     description:
-      "Explore related symbols and files with CodeGraph explore. The reply already includes callers, call paths, and blast radius — do not look for a callers tool. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass path or root to query a different repository. Each call uses exactly one root. Default detail is a summary plus paths; pass detail full for the complete dump.",
+      "Explore related symbols and files with CodeGraph explore. Returns a map of the code — related symbols, files, call paths, and blast radius — to read next, not a written answer, so expect to open the files it names. Do not look for a callers tool. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass path or root to query a different repository. Each call uses exactly one root. Default detail is a summary plus paths; pass detail full for the complete dump.",
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
           description:
-            "Natural-language or symbol query for related code and relationships",
+            'Identifiers, or "how does X work" where X is identifiers, for example "GlobalAgent prepare_planner saas_reply_planner" or "how does saas_message build CommandReplyResponse". Identifier-shaped queries match the graph; a multi-paragraph question does not.',
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,

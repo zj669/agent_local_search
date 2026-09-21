@@ -770,6 +770,47 @@ test("instructions tell agents to check the root a reply resolved to", async () 
   });
 });
 
+test("tool descriptions say when to pass root and how to shape a query", async () => {
+  await withServer({}, async ({ send, waitFor }) => {
+    send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-03-26", capabilities: {} },
+    });
+    const init = await waitFor((message) => message.id === 1);
+    assert.match(
+      init.result.instructions,
+      /map of the code to read next, not a written answer/,
+    );
+
+    send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+    const listed = await waitFor((message) => message.id === 2);
+    const tools = Object.fromEntries(
+      listed.result.tools.map((tool) => [tool.name, tool]),
+    );
+    for (const tool of Object.values(tools)) {
+      assert.match(
+        tool.inputSchema.properties.root.description,
+        /not the session cwd/,
+      );
+      assert.match(
+        tool.inputSchema.properties.detail.description,
+        /complete match text or the full graph dump/,
+      );
+    }
+    assert.match(
+      tools.grep.inputSchema.properties.pattern.description,
+      /One identifier or one regex/,
+    );
+    assert.match(
+      tools.graph.inputSchema.properties.query.description,
+      /a multi-paragraph question does not/,
+    );
+    assert.match(tools.graph.description, /not a written answer/);
+  });
+});
+
 test("MCP replies start with freshness and keep a graph budget", async () => {
   await withServer(
     {
