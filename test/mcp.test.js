@@ -90,7 +90,7 @@ test("initialize advertises only find, grep, and graph", async () => {
     const init = await waitFor((message) => message.id === 1);
     assert.equal(init.result.protocolVersion, "2025-03-26");
     assert.equal(init.result.serverInfo.name, "codeq");
-    assert.equal(init.result.serverInfo.version, "0.2.0");
+    assert.equal(init.result.serverInfo.version, "0.2.1");
     assert.match(init.result.instructions, /never ask the user to init/i);
 
     send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
@@ -279,7 +279,7 @@ test("path/root and cwd switch a single root with no fusion", async () => {
   );
 });
 
-test("uses client roots as the default working directory", async () => {
+test("uses client roots as the session cwd, like pi-fff ctx.cwd", async () => {
   const seen = [];
   await withServer(
     {
@@ -318,6 +318,84 @@ test("uses client roots as the default working directory", async () => {
       });
       await waitFor((message) => message.id === 2);
       assert.equal(seen[0].cwd, "/repos/workspace");
+
+      send({ jsonrpc: "2.0", method: "notifications/roots/list_changed" });
+      const relist = await waitFor(
+        (message) => message.method === "roots/list" && message.id !== listRoots.id,
+      );
+      input.write(
+        encodeMessage({
+          jsonrpc: "2.0",
+          id: relist.id,
+          result: { roots: [{ uri: "file:///repos/other", name: "other" }] },
+        }),
+      );
+      send({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "find", arguments: { query: "pkg" } },
+      });
+      await waitFor((message) => message.id === 3);
+      assert.equal(seen[1].cwd, "/repos/other");
     },
   );
+});
+
+test("defaults to process.cwd and ignores CODEQ_CWD-style path env", async () => {
+  const previous = process.env.CODEQ_CWD;
+  process.env.CODEQ_CWD = "/env/should-not-win";
+  const seen = [];
+  try {
+    await withServer(
+      {
+        cwd: undefined,
+        query: async (request) => {
+          seen.push(request);
+          return { root: request.cwd, status: "ready", results: [] };
+        },
+      },
+      async ({ send, waitFor }) => {
+        send({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2025-03-26", capabilities: {} },
+        });
+        await waitFor((message) => message.id === 1);
+        send({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "find", arguments: { query: "pkg" } },
+        });
+        await waitFor((message) => message.id === 2);
+        assert.equal(seen[0].cwd, process.cwd());
+        assert.notEqual(seen[0].cwd, "/env/should-not-win");
+      },
+    );
+  } finally {
+    if (previous === undefined) delete process.env.CODEQ_CWD;
+    else process.env.CODEQ_CWD = previous;
+  }
+});
+
+test("tool schemas do not mention a workspace path env", async () => {
+  await withServer({}, async ({ send, waitFor }) => {
+    send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-03-26", capabilities: {} },
+    });
+    await waitFor((message) => message.id === 1);
+    send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+    const listed = await waitFor((message) => message.id === 2);
+    const blob = JSON.stringify(listed.result.tools);
+    assert.equal(blob.includes("CODEQ_CWD"), false);
+    for (const tool of listed.result.tools) {
+      assert.equal(Boolean(tool.inputSchema.properties.path), true);
+      assert.equal(Boolean(tool.inputSchema.properties.root), true);
+    }
+  });
 });

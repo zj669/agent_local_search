@@ -11,6 +11,26 @@ const PROTOCOL_VERSIONS = [
   "2024-11-05",
 ];
 
+const ROOTS_LIST_TIMEOUT_MS = 5_000;
+
+const PATH_PROPERTY = {
+  type: "string",
+  description:
+    "Optional path constraint relative to the session cwd. Workspace-relative paths stay on the current root; absolute, ~/, and ../ paths that leave the workspace switch to that repository. Each call uses exactly one root.",
+};
+
+const ROOT_PROPERTY = {
+  type: "string",
+  description:
+    "Optional explicit index root. Overrides Git/cwd detection for this call.",
+};
+
+const CWD_PROPERTY = {
+  type: "string",
+  description:
+    "Working directory for resolving relative path/root. Defaults to the MCP client's session workspace (roots/list) or process.cwd().",
+};
+
 const TOOLS = [
   {
     name: "find",
@@ -24,21 +44,9 @@ const TOOLS = [
           type: "string",
           description: "File name or path fragment to search for",
         },
-        path: {
-          type: "string",
-          description:
-            "Optional path constraint relative to cwd. If it points at another repository, that root is used instead.",
-        },
-        root: {
-          type: "string",
-          description:
-            "Optional explicit index root. Overrides Git/cwd detection for this call.",
-        },
-        cwd: {
-          type: "string",
-          description:
-            "Working directory for resolving relative path/root. Defaults to the workspace or CODEQ_CWD.",
-        },
+        path: PATH_PROPERTY,
+        root: ROOT_PROPERTY,
+        cwd: CWD_PROPERTY,
         limit: {
           type: "integer",
           minimum: 1,
@@ -65,21 +73,9 @@ const TOOLS = [
           type: "string",
           description: "Text pattern to search for",
         },
-        path: {
-          type: "string",
-          description:
-            "Optional path constraint relative to cwd. If it points at another repository, that root is used instead.",
-        },
-        root: {
-          type: "string",
-          description:
-            "Optional explicit index root. Overrides Git/cwd detection for this call.",
-        },
-        cwd: {
-          type: "string",
-          description:
-            "Working directory for resolving relative path/root. Defaults to the workspace or CODEQ_CWD.",
-        },
+        path: PATH_PROPERTY,
+        root: ROOT_PROPERTY,
+        cwd: CWD_PROPERTY,
         glob: {
           type: "string",
           description: "Optional glob used to constrain matches, for example **/*.ts",
@@ -111,21 +107,9 @@ const TOOLS = [
           description:
             "Natural-language or symbol query for related code and relationships",
         },
-        path: {
-          type: "string",
-          description:
-            "Optional path constraint relative to cwd. If it points at another repository, that root is used instead.",
-        },
-        root: {
-          type: "string",
-          description:
-            "Optional explicit index root. Overrides Git/cwd detection for this call.",
-        },
-        cwd: {
-          type: "string",
-          description:
-            "Working directory for resolving relative path/root. Defaults to the workspace or CODEQ_CWD.",
-        },
+        path: PATH_PROPERTY,
+        root: ROOT_PROPERTY,
+        cwd: CWD_PROPERTY,
       },
       required: ["query"],
     },
@@ -197,7 +181,6 @@ function parseContentLength(header) {
 
 function defaultCwd(override) {
   if (override) return override;
-  if (process.env.CODEQ_CWD) return process.env.CODEQ_CWD;
   return process.cwd();
 }
 
@@ -302,10 +285,18 @@ export function createMcpServer({
     send(message);
   }
 
-  async function requestClient(method, params) {
+  async function requestClient(method, params, timeoutMs) {
     const id = `codeq-${nextServerId++}`;
     const result = new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const waiter = { resolve, reject };
+      if (timeoutMs) {
+        waiter.timer = setTimeout(() => {
+          if (!pending.has(id)) return;
+          pending.delete(id);
+          reject(new Error(`${method} timeout`));
+        }, timeoutMs);
+      }
+      pending.set(id, waiter);
     });
     send({ jsonrpc: "2.0", id, method, params });
     return result;
@@ -314,7 +305,11 @@ export function createMcpServer({
   async function refreshRoots() {
     if (!clientSupportsRoots) return;
     try {
-      const result = await requestClient("roots/list");
+      const result = await requestClient(
+        "roots/list",
+        undefined,
+        ROOTS_LIST_TIMEOUT_MS,
+      );
       const root = result?.roots?.find((entry) => entry?.uri?.startsWith("file:"));
       const path = fileUriToPath(root?.uri);
       if (path) workspaceCwd = path;
@@ -360,6 +355,7 @@ export function createMcpServer({
       const waiter = pending.get(message.id);
       if (!waiter) return;
       pending.delete(message.id);
+      if (waiter.timer) clearTimeout(waiter.timer);
       if (message.error) {
         waiter.reject(new Error(message.error.message || "client error"));
       } else {
@@ -380,6 +376,10 @@ export function createMcpServer({
       rootsPromise = refreshRoots();
       return;
     }
+    if (method === "notifications/roots/list_changed") {
+      rootsPromise = refreshRoots();
+      return;
+    }
     if (isNotification) return;
 
     if (method === "initialize") {
@@ -394,7 +394,7 @@ export function createMcpServer({
           },
           serverInfo,
           instructions:
-            "codeq searches one local repository at a time with find, grep, and graph. Indexes are created automatically on first use. Use path or root to switch repositories; never merge results across roots, and never ask the user to init or create a .codegraph directory.",
+            "codeq searches one local repository at a time with find, grep, and graph. Indexes are created automatically on first use. The workspace is the client session directory or process cwd. Use path or root to switch repositories; never merge results across roots, and never ask the user to init or create a .codegraph directory.",
         },
       });
       return;

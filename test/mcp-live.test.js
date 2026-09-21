@@ -48,7 +48,7 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
   const child = spawn(process.execPath, [bin, "mcp"], {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: repo,
-    env: { ...process.env, CODEQ_DATA_DIR: dataDir, CODEQ_CWD: repo },
+    env: { ...process.env, CODEQ_DATA_DIR: dataDir },
   });
   t.after(() => {
     child.kill("SIGTERM");

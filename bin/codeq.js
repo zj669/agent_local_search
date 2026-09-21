@@ -13,7 +13,9 @@ const MCP_USAGE = `Usage:
   codeq mcp
 
 Run a stdio MCP server that exposes find, grep, and graph. The server reuses
-the per-user codeq daemon and indexes a root automatically on first use.`;
+the per-user codeq daemon and indexes a root automatically on first use.
+The workspace is the MCP client's session directory (roots/list) or process
+cwd; pass path or root to search a different repository.`;
 
 function fail(message, code = 2) {
   process.stderr.write(`codeq: ${message}\n\n${USAGE}\n`);

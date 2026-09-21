@@ -1,6 +1,6 @@
 {
   "name": "@zj669/codeq",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local file, text, and code-graph search from a CLI or MCP server",
   "type": "module",
   "bin": {
