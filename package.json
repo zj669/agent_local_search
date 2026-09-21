@@ -1,5 +1,5 @@
 {
-  "name": "@codeq/cli",
+  "name": "@zj669/codeq",
   "version": "0.1.0",
   "description": "Local file, text, and code-graph search from one CLI",
   "type": "module",

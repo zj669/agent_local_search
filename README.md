@@ -4,14 +4,44 @@
 local CLI and an automatically managed per-user daemon.
 
 ```bash
-npm install -g @codeq/cli
-
 codeq find router
 codeq grep "TODO" --glob "**/*.ts" --context 2
 codeq graph "how does authentication reach the session store?"
 ```
 
 Node.js `>=22.5 <25` is required.
+
+## Install, update, and uninstall
+
+Install:
+
+```bash
+npm install -g @zj669/codeq
+```
+
+Update:
+
+```bash
+npm update -g @zj669/codeq
+```
+
+Uninstall:
+
+```bash
+npm uninstall -g @zj669/codeq
+```
+
+As a fallback, install the latest source archive from GitHub:
+
+```bash
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/main.tar.gz
+```
+
+To pin the current GitHub release instead:
+
+```bash
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.1.0.tar.gz
+```
 
 ## Commands
 
