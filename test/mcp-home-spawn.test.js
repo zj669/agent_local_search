@@ -14,7 +14,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createFramedParser, encodeMessage } from "../src/mcp.js";
-import { parseMcpToolText } from "../src/mcp-format.js";
 
 const bin = fileURLToPath(new URL("../bin/codeq.js", import.meta.url));
 const wrapper = fileURLToPath(new URL("../bin/codeq-mcp", import.meta.url));
@@ -144,7 +143,7 @@ class McpSession {
     return {
       isError: Boolean(message.result?.isError),
       text,
-      payload: message.result?.isError ? null : parseMcpToolText(text),
+      payload: message.result?.structuredContent ?? null,
     };
   }
 
