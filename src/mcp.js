@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { queryDaemon } from "./client.js";
 import { formatMcpToolResult, MCP_INSTRUCTIONS } from "./mcp-format.js";
+import { isUnusableWorkspace } from "./paths.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -26,10 +27,13 @@ const ROOT_PROPERTY = {
     "Optional explicit index root. Overrides Git/cwd detection for this call.",
 };
 
+export const NO_WORKSPACE_ERROR =
+  "no workspace (spawned from home). Pass path or root to a repository on this call.";
+
 const CWD_PROPERTY = {
   type: "string",
   description:
-    "Working directory for resolving relative path/root. Defaults to the MCP client's session workspace (roots/list) or process.cwd().",
+    "Working directory for resolving relative path/root. Defaults to the MCP client's session workspace (roots/list) or process.cwd() when that is a real project, not $HOME or /.",
 };
 
 const LIMIT_PROPERTY = {
@@ -324,7 +328,8 @@ export function createMcpServer({
   query = queryDaemon,
   cwd: fallbackCwd,
 } = {}) {
-  let workspaceCwd = defaultCwd(fallbackCwd);
+  const spawnCwd = defaultCwd(fallbackCwd);
+  let workspaceCwd = isUnusableWorkspace(spawnCwd) ? null : spawnCwd;
   let clientSupportsRoots = false;
   let rootsPromise = Promise.resolve();
   const pending = new Map();
@@ -363,15 +368,33 @@ export function createMcpServer({
         ROOTS_LIST_TIMEOUT_MS,
         framing,
       );
-      const root = result?.roots?.find((entry) => entry?.uri?.startsWith("file:"));
-      const path = fileUriToPath(root?.uri);
-      if (path) workspaceCwd = path;
+      const roots = result?.roots || [];
+      for (const entry of roots) {
+        const path = fileUriToPath(entry?.uri);
+        if (path && !isUnusableWorkspace(path)) {
+          workspaceCwd = path;
+          return;
+        }
+      }
     } catch {}
+  }
+
+  function sessionCwd(args) {
+    if (args?.cwd != null && String(args.cwd).trim() !== "") {
+      if (!isUnusableWorkspace(args.cwd)) return String(args.cwd);
+    }
+    return workspaceCwd;
   }
 
   async function callTool(name, args, meta, signal, framing) {
     await rootsPromise;
-    const request = toolRequest(name, args ?? {}, args?.cwd || workspaceCwd);
+    const cwd = sessionCwd(args);
+    const hasPath = args?.path != null && String(args.path).trim() !== "";
+    const hasRoot = args?.root != null && String(args.root).trim() !== "";
+    if (!cwd && !hasPath && !hasRoot) {
+      throw new Error(NO_WORKSPACE_ERROR);
+    }
+    const request = toolRequest(name, args ?? {}, cwd || spawnCwd);
     const result = await query(request, {
       signal,
       onProgress: (progress) => {

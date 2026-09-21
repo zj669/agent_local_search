@@ -223,7 +223,7 @@ const widget = (name, token, extra) =>
   ].join("\n");
 
 test(
-  "MCP stdio matches CLI: tools/list, worktree, cross-repo, multi-root, refuse HOME/",
+  "MCP stdio matches CLI: tools/list, worktree, cross-repo, multi-root, HOME spawn",
   { timeout: 240_000 },
   async (t) => {
     const parent = mkdtempSync(join(tmpdir(), "codeq-mcp-parity-"));
@@ -455,8 +455,9 @@ test(
     assert.deepEqual(homeTools, ["find", "grep", "graph"]);
     const homeFind = await homeSession.call("find", { query: "AlphaWorktreeWidget" });
     assert.equal(homeFind.isError, true);
-    assert.match(homeFind.text, /refusing to index/);
-    assert.match(homeFind.text, /home directory/);
+    assert.match(homeFind.text, /no workspace \(spawned from home\)/);
+    assert.match(homeFind.text, /Pass path or root/);
+    assert.equal(homeFind.text.includes("refusing to index"), false);
     const cliHome = cli(["find", "AlphaWorktreeWidget"], {
       cwd: homedir(),
       env,
@@ -465,12 +466,23 @@ test(
     assert.match(cliHome.stderr, /refusing to index/);
     assert.match(cliHome.stderr, /home directory/);
 
+    const homeFindB = await homeSession.call("find", {
+      query: "BetaUniqueModule",
+      path: repoB,
+    });
+    assert.equal(homeFindB.isError, false, homeFindB.text);
+    assert.equal(homeFindB.payload.root, repoB);
+    assert.ok(
+      homeFindB.payload.paths.some((path) => path.endsWith("BetaUniqueModule.ts")),
+    );
+
     slashSession = spawnMcp({ cwd: "/", env });
     await slashSession.initialize();
     const slashFind = await slashSession.call("find", { query: "AlphaWorktreeWidget" });
     assert.equal(slashFind.isError, true);
-    assert.match(slashFind.text, /refusing to index/);
-    assert.match(slashFind.text, /filesystem root/);
+    assert.match(slashFind.text, /no workspace \(spawned from home\)/);
+    assert.match(slashFind.text, /Pass path or root/);
+    assert.equal(slashFind.text.includes("refusing to index"), false);
     const cliSlash = cli(["find", "AlphaWorktreeWidget"], { cwd: "/", env });
     assert.equal(cliSlash.ok, false);
     assert.match(cliSlash.stderr, /filesystem root/);

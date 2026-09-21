@@ -10,57 +10,57 @@ codeq graph "how does authentication reach the session store?"
 codeq mcp
 ```
 
-Node.js `>=22.5 <25` is required.
+Node.js `>=22.5 <25` is required. Cursor's PATH `node` may be 26; use the
+`codeq-mcp` wrapper, which pins Homebrew `node@22` or nvm/fnm 22.
 
 ## Cursor MCP
 
-After a global install (`npm install -g @zj669/codeq`), add this to
-`.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
+Install globally, then put this in **`~/.cursor/mcp.json`** (global; this is
+the default). Project `.cursor/mcp.json` is optional.
+
+```bash
+npm install -g @zj669/codeq
+```
 
 ```json
 {
   "mcpServers": {
     "codeq": {
       "type": "stdio",
-      "command": "codeq",
-      "args": ["mcp"],
-      "cwd": "${workspaceFolder}"
+      "command": "codeq-mcp",
+      "args": ["${workspaceFolder}"],
+      "env": {
+        "NODE_ENV": "production"
+      }
     }
   }
 }
 ```
 
-`cwd` is Cursor's stdio **spawn working directory** for the MCP process — the
-same `process.cwd()` the CLI reads from your shell. It is not a `codeq`
-argument and not an environment variable. Do not set `CODEQ_CWD`.
+`codeq-mcp` is the official wrapper. It never uses `npx` on the stdio pipe
+(npx steals stdin and the handshake times out). It execs
+`node bin/codeq.js mcp` with a Node in `>=22.5 <25`.
 
-If the client sends `roots/list`, that session workspace is used; otherwise
-codeq uses this spawn cwd. Git then promotes the directory to the deepest
-worktree, the same way the CLI does. Spawned from `$HOME` or `/` with no
-workspace path, searches refuse those roots.
+Do **not** set `cwd`. Cursor ignores mcp.json `cwd` here: the MCP helper's
+cwd is `/`, and the stdio child starts in `$HOME`. `${workspaceFolder}` in
+`args` is a **hint only** and is sometimes left uninterpolated. Do not set `CODEQ_CWD`.
+Do not use `WORKSPACE_FOLDER_PATHS` as the only root — it is a
+multi-root list, and the first entry is not always the current window.
 
-Without a global install, `npx` also works if you still set spawn `cwd`:
-
-```json
-{
-  "mcpServers": {
-    "codeq": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@zj669/codeq", "mcp"],
-      "cwd": "${workspaceFolder}"
-    }
-  }
-}
-```
+MCP is **lazy**. `initialize` / `tools/list` do not pick a root or index.
+Indexing starts on `tools/call` when there is a real target: `path` / `root`
+on that call, else `roots/list` if the client gave a non-HOME folder, else a
+spawn cwd that is not `$HOME` or `/`. Spawned from `$HOME` with no path/root
+and no usable `roots/list`, the tool returns a "pass path or root" error
+instead of indexing home.
 
 The MCP tools are `find`, `grep`, and `graph`. They reuse the same user-level
-daemon as the CLI, index a root automatically on first use, and accept `path` /
-`root` to switch repositories. A call always searches exactly one root.
+daemon as the CLI. A call always searches exactly one root. Pass `path` /
+`root` to search another repository (CLI `--path` / `--root`).
 
-stdio accepts both newline-delimited JSON-RPC (one object per line, as OpenCode
-sends) and LSP `Content-Length` frames (as Cursor sends). Each reply uses the
-same framing as that request.
+stdio accepts both newline-delimited JSON-RPC (one object per line, as
+OpenCode sends) and LSP `Content-Length` frames (as Cursor sends). Each reply
+uses the same framing as that request. There is no Python framing bridge.
 
 `grep` auto-detects regex, retries as fuzzy when a literal search has zero
 hits, and rejects all-match patterns such as `.*`. Both CLI and MCP accept
@@ -68,10 +68,6 @@ hits, and rejects all-match patterns such as `.*`. Both CLI and MCP accept
 `indexing` / `degraded` and `lastSuccessfulSync`) and default to a short
 summary plus paths; pass `detail: "full"` for complete match text or the full
 graph dump.
-
-Workspace discovery matches the FFF plugin in pi (`@ff-labs/pi-fff`): no
-project-path env var. Prefer `roots/list` when the client provides it, else
-the spawn `process.cwd()`.
 
 ## Install, update, and uninstall
 
@@ -102,7 +98,7 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/ma
 To pin the current GitHub release instead:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.3.tar.gz
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.4.tar.gz
 ```
 
 ## Commands

@@ -5,11 +5,13 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import {
   createFramedParser,
   createMcpServer,
   encodeMessage,
   negotiateProtocolVersion,
+  NO_WORKSPACE_ERROR,
 } from "../src/mcp.js";
 import { parseMcpToolText } from "../src/mcp-format.js";
 
@@ -512,6 +514,105 @@ test("uses client roots as the session cwd, like pi-fff ctx.cwd", async () => {
   );
 });
 
+test("HOME spawn handshake does not query; tools/call needs path or root", async () => {
+  const seen = [];
+  await withServer(
+    {
+      cwd: homedir(),
+      query: async (request) => {
+        seen.push(request);
+        return { root: request.path || request.root, status: "ready", results: [] };
+      },
+    },
+    async ({ send, waitFor }) => {
+      send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-03-26", capabilities: {} },
+      });
+      await waitFor((message) => message.id === 1);
+      send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+      await waitFor((message) => message.id === 2);
+      assert.equal(seen.length, 0);
+
+      send({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "find", arguments: { query: "pkg" } },
+      });
+      const missing = await waitFor((message) => message.id === 3);
+      assert.equal(missing.result.isError, true);
+      assert.equal(missing.result.content[0].text, NO_WORKSPACE_ERROR);
+      assert.match(missing.result.content[0].text, /pass path or root/i);
+      assert.equal(missing.result.content[0].text.includes("refusing to index"), false);
+      assert.equal(seen.length, 0);
+
+      send({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: {
+          name: "find",
+          arguments: { query: "pkg", path: "/repos/beta" },
+        },
+      });
+      await waitFor((message) => message.id === 4);
+      assert.equal(seen.length, 1);
+      assert.equal(seen[0].path, "/repos/beta");
+      assert.equal(seen[0].cwd, homedir());
+    },
+  );
+});
+
+test("HOME spawn uses roots/list only when that folder is not HOME", async () => {
+  const seen = [];
+  await withServer(
+    {
+      cwd: homedir(),
+      query: async (request) => {
+        seen.push(request);
+        return { root: request.cwd, status: "ready", results: [] };
+      },
+    },
+    async ({ send, waitFor, input }) => {
+      send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-03-26",
+          capabilities: { roots: { listChanged: true } },
+        },
+      });
+      await waitFor((message) => message.id === 1);
+      send({ jsonrpc: "2.0", method: "notifications/initialized" });
+      const listRoots = await waitFor((message) => message.method === "roots/list");
+      input.write(
+        encodeMessage({
+          jsonrpc: "2.0",
+          id: listRoots.id,
+          result: {
+            roots: [
+              { uri: `file://${homedir()}`, name: "home" },
+              { uri: "file:///repos/workspace", name: "workspace" },
+            ],
+          },
+        }),
+      );
+      send({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "find", arguments: { query: "pkg" } },
+      });
+      await waitFor((message) => message.id === 2);
+      assert.equal(seen[0].cwd, "/repos/workspace");
+    },
+  );
+});
+
 test("defaults to process.cwd and ignores CODEQ_CWD-style path env", async () => {
   const previous = process.env.CODEQ_CWD;
   process.env.CODEQ_CWD = "/env/should-not-win";
@@ -611,7 +712,24 @@ test("MCP replies start with freshness and keep a graph budget", async () => {
   );
 });
 
-test("README default MCP snippet uses global codeq and spawn cwd, not CODEQ_CWD", () => {
+test("initialize instructions tell agents to pass path or root from HOME", async () => {
+  await withServer(
+    { cwd: homedir() },
+    async ({ send, waitFor }) => {
+      send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-03-26", capabilities: {} },
+      });
+      const init = await waitFor((message) => message.id === 1);
+      assert.match(init.result.instructions, /Indexing starts on tools\/call/);
+      assert.match(init.result.instructions, /pass path or root/i);
+    },
+  );
+});
+
+test("README default MCP snippet is the wrapper, no npx, no cwd field", () => {
   const readme = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), "..", "README.md"),
     "utf8",
@@ -619,9 +737,11 @@ test("README default MCP snippet uses global codeq and spawn cwd, not CODEQ_CWD"
   assert.equal(readme.includes("CODEQ_CWD"), true);
   assert.match(readme, /Do not set `CODEQ_CWD`/);
   const firstSnippet = readme.split("```json")[1].split("```")[0];
-  assert.match(firstSnippet, /"command": "codeq"/);
-  assert.match(firstSnippet, /"cwd": "\$\{workspaceFolder\}"/);
+  assert.match(firstSnippet, /"command": "codeq-mcp"/);
+  assert.match(firstSnippet, /"args": \["\$\{workspaceFolder\}"\]/);
   assert.equal(firstSnippet.includes("npx"), false);
+  assert.equal(firstSnippet.includes('"cwd"'), false);
   assert.equal(firstSnippet.includes("CODEQ_CWD"), false);
-  assert.match(readme, /spawn working directory/);
+  assert.match(readme, /npx steals stdin/);
+  assert.match(readme, /codeq-mcp/);
 });

@@ -32,7 +32,8 @@ test("mcp help describes the stdio server", () => {
   assert.match(stdout, /stdio MCP server/);
   assert.match(stdout, /find, grep, and graph/);
   assert.match(stdout, /roots\/list/);
-  assert.match(stdout, /spawn cwd/);
+  assert.match(stdout, /codeq-mcp/);
+  assert.match(stdout, /does not index/);
 });
 
 test("mcp rejects extra arguments", () => {

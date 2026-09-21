@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+# Cursor-facing launcher for codeq MCP.
+# Cursor ignores mcp.json `cwd` (spawn starts in $HOME; helper cwd is /).
+# npx on the stdio pipe breaks the handshake. Pin Node >=22.5 <25
+# (Homebrew node@22 / nvm / fnm) and exec this package's bin/codeq.js.
+#
+# $1 is ${workspaceFolder} — a hint only, sometimes left uninterpolated.
+# Do not treat WORKSPACE_FOLDER_PATHS as the default root (multi-root list;
+# the first entry is not always the current window).
+# If no usable project dir is found, still start MCP (lazy): handshake does
+# not index; tools/call needs path/root, roots/list, or a non-HOME cwd.
+set -euo pipefail
+
+is_usable_dir() {
+  local p="${1:-}"
+  [[ -n "$p" && -d "$p" && "$p" != *'${'* && "$p" != "$HOME" && "$p" != "/" ]]
+}
+
+trim() {
+  local s="${1:-}"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+node_compatible() {
+  local bin="${1:-}"
+  [[ -n "$bin" && -x "$bin" ]] || return 1
+  local ver
+  ver="$("$bin" -p 'process.versions.node' 2>/dev/null || true)"
+  ver="${ver//$'\r'/}"
+  ver="${ver//$'\n'/}"
+  ver="${ver#v}"
+  local major minor
+  IFS='.' read -r major minor _ <<<"$ver"
+  [[ -n "${major:-}" && -n "${minor:-}" ]] || return 1
+  if (( major == 22 && minor >= 5 )); then
+    return 0
+  fi
+  if (( major == 23 || major == 24 )); then
+    return 0
+  fi
+  return 1
+}
+
+find_node() {
+  local candidates=()
+  if [[ -n "${CODEQ_NODE:-}" ]]; then
+    candidates+=("$CODEQ_NODE")
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    local brew_prefix
+    brew_prefix="$(brew --prefix node@22 2>/dev/null || true)"
+    if [[ -n "$brew_prefix" ]]; then
+      candidates+=("${brew_prefix}/bin/node")
+    fi
+  fi
+
+  local prefixes=()
+  if [[ -n "${HOMEBREW_PREFIX:-}" ]]; then
+    prefixes+=("$HOMEBREW_PREFIX")
+  fi
+  prefixes+=("/opt/homebrew" "/usr/local" "/home/linuxbrew/.linuxbrew")
+  local prefix
+  for prefix in "${prefixes[@]}"; do
+    candidates+=("${prefix}/opt/node@22/bin/node")
+  done
+
+  local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+  if [[ -d "${nvm_dir}/versions/node" ]]; then
+    local nvm_nodes=()
+    shopt -s nullglob
+    nvm_nodes=("${nvm_dir}/versions/node"/v*/bin/node)
+    shopt -u nullglob
+    local i
+    for (( i=${#nvm_nodes[@]}-1; i>=0; i-- )); do
+      candidates+=("${nvm_nodes[$i]}")
+    done
+  fi
+
+  if [[ -n "${FNM_MULTISHELL_PATH:-}" ]]; then
+    candidates+=("${FNM_MULTISHELL_PATH}/node")
+  fi
+  local fnm_dir="${FNM_DIR:-$HOME/.local/share/fnm}"
+  if [[ -d "${fnm_dir}/node-versions" ]]; then
+    shopt -s nullglob
+    candidates+=("${fnm_dir}/node-versions"/v*/installation/bin/node)
+    shopt -u nullglob
+  fi
+
+  local asdf_dir="${ASDF_DATA_DIR:-$HOME/.asdf}"
+  if [[ -d "${asdf_dir}/installs/nodejs" ]]; then
+    shopt -s nullglob
+    candidates+=("${asdf_dir}/installs/nodejs"/*/bin/node)
+    shopt -u nullglob
+  fi
+
+  if [[ -d "$HOME/.volta/tools/image/node" ]]; then
+    shopt -s nullglob
+    candidates+=("$HOME/.volta/tools/image/node"/*/bin/node)
+    shopt -u nullglob
+  fi
+
+  if command -v node >/dev/null 2>&1; then
+    candidates+=("$(command -v node)")
+  fi
+
+  local bin
+  for bin in "${candidates[@]}"; do
+    if node_compatible "$bin"; then
+      printf '%s\n' "$bin"
+      return 0
+    fi
+  done
+  return 1
+}
+
+package_bin_dir() {
+  local source="${BASH_SOURCE[0]}"
+  local dir
+  while [[ -L "$source" ]]; do
+    dir="$(cd -P "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    [[ "$source" != /* ]] && source="${dir}/${source}"
+  done
+  cd -P "$(dirname "$source")" && pwd
+}
+
+BIN_DIR="$(package_bin_dir)"
+CODEQ_JS="${BIN_DIR}/codeq.js"
+
+NODE="$(find_node || true)"
+if [[ -z "$NODE" || ! -x "$NODE" ]]; then
+  echo "codeq-mcp: need Node >=22.5 <25 (PATH node is too new or missing). Install Homebrew node@22 (\`brew install node@22\`) or nvm/fnm Node 22, then restart Cursor. Do not use npx as the MCP command (it steals stdio)." >&2
+  exit 1
+fi
+
+if [[ ! -f "$CODEQ_JS" ]]; then
+  echo "codeq-mcp: package bin not found: $CODEQ_JS" >&2
+  exit 1
+fi
+
+# Hint only. WORKSPACE_FOLDER_PATHS is intentionally omitted.
+candidates=(
+  "${1:-}"
+  "${CODEQ_WORKSPACE_FOLDER:-}"
+  "${FFF_WORKSPACE_FOLDER:-}"
+  "${CURSOR_PROJECT_DIR:-}"
+  "${VSCODE_CWD:-}"
+  "${PWD:-}"
+)
+
+target=""
+for candidate in "${candidates[@]}"; do
+  candidate="$(trim "$candidate")"
+  if is_usable_dir "$candidate"; then
+    target="$candidate"
+    break
+  fi
+done
+
+if [[ -n "$target" ]]; then
+  cd "$target"
+fi
+
+export PATH="$(cd -P "$(dirname "$NODE")" && pwd):${PATH}"
+export CODEQ_NODE="$NODE"
+
+if [[ "${CODEQ_MCP_DRY_RUN:-}" == "1" ]]; then
+  printf 'node=%s bin=%s cwd=%s target=%s\n' "$NODE" "$CODEQ_JS" "$(pwd)" "${target:-}"
+  exit 0
+fi
+
+# Direct exec: node <package>/bin/codeq.js mcp. Never npx on this pipe.
+exec "$NODE" "$CODEQ_JS" mcp

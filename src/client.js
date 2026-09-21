@@ -22,10 +22,12 @@ export async function connectDaemon() {
   mkdirSync(dirname(paths.log), { recursive: true });
   const logFd = openSync(paths.log, "a");
   const script = fileURLToPath(new URL("./daemon.js", import.meta.url));
+  const packageRoot = fileURLToPath(new URL("..", import.meta.url));
   const child = spawn(process.execPath, [script], {
     detached: true,
     stdio: ["ignore", logFd, logFd],
     env: process.env,
+    cwd: packageRoot,
   });
   child.unref();
   closeSync(logFd);
