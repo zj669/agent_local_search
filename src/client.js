@@ -13,12 +13,27 @@ function openSocket(socketPath) {
   });
 }
 
+// Concurrent cold tool calls used to spawn one daemon each; they then raced to
+// bind the socket and to migrate the same CodeGraph database ("database is
+// locked"). One launch per process, everyone else waits for it.
+let launching = null;
+
 export async function connectDaemon() {
   const paths = daemonPaths();
   try {
     return await openSocket(paths.socket);
   } catch {}
 
+  if (!launching) {
+    launching = launchDaemon(paths).finally(() => {
+      launching = null;
+    });
+  }
+  await launching;
+  return openSocket(paths.socket);
+}
+
+async function launchDaemon(paths) {
   mkdirSync(dirname(paths.log), { recursive: true });
   const logFd = openSync(paths.log, "a");
   const script = fileURLToPath(new URL("./daemon.js", import.meta.url));
@@ -36,7 +51,9 @@ export async function connectDaemon() {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 50));
     try {
-      return await openSocket(paths.socket);
+      const probe = await openSocket(paths.socket);
+      probe.end();
+      return;
     } catch (error) {
       lastError = error;
     }
