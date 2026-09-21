@@ -58,6 +58,10 @@ The MCP tools are `find`, `grep`, and `graph`. They reuse the same user-level
 daemon as the CLI, index a root automatically on first use, and accept `path` /
 `root` to switch repositories. A call always searches exactly one root.
 
+stdio accepts both newline-delimited JSON-RPC (one object per line, as OpenCode
+sends) and LSP `Content-Length` frames (as Cursor sends). Each reply uses the
+same framing as that request.
+
 `grep` auto-detects regex, retries as fuzzy when a literal search has zero
 hits, and rejects all-match patterns such as `.*`. Both CLI and MCP accept
 `--limit` / `limit`. MCP replies start with index freshness (`ready` /
@@ -98,7 +102,7 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/ma
 To pin the current GitHub release instead:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.2.tar.gz
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.3.tar.gz
 ```
 
 ## Commands
