@@ -7,6 +7,7 @@ import {
   encodeMessage,
   negotiateProtocolVersion,
 } from "../src/mcp.js";
+import { parseMcpToolText } from "../src/mcp-format.js";
 
 function collectMessages(stream) {
   const messages = [];
@@ -92,6 +93,9 @@ test("initialize advertises only find, grep, and graph", async () => {
     assert.equal(init.result.serverInfo.name, "codeq");
     assert.equal(init.result.serverInfo.version, "0.2.1");
     assert.match(init.result.instructions, /never ask the user to init/i);
+    assert.match(init.result.instructions, /graph: how code works/i);
+    assert.match(init.result.instructions, /There is no callers tool/i);
+    assert.match(init.result.instructions, /detail: "full"/i);
 
     send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const listed = await waitFor((message) => message.id === 2);
@@ -152,7 +156,13 @@ test("tools map 1:1 onto daemon find/grep/graph requests", async () => {
         method: "tools/call",
         params: {
           name: "grep",
-          arguments: { pattern: "TODO", glob: "**/*.ts", context: 1, root: "/repo" },
+          arguments: {
+            pattern: "TODO",
+            glob: "**/*.ts",
+            context: 1,
+            root: "/repo",
+            limit: 8,
+          },
         },
       });
       send({
@@ -170,9 +180,10 @@ test("tools map 1:1 onto daemon find/grep/graph requests", async () => {
       const graph = await waitFor((message) => message.id === 4);
 
       assert.equal(find.result.isError, undefined);
-      assert.equal(JSON.parse(find.result.content[0].text).command, "find");
-      assert.equal(JSON.parse(grep.result.content[0].text).command, "grep");
-      assert.equal(JSON.parse(graph.result.content[0].text).command, "graph");
+      assert.equal(parseMcpToolText(find.result.content[0].text).command, "find");
+      assert.equal(parseMcpToolText(grep.result.content[0].text).command, "grep");
+      assert.equal(parseMcpToolText(graph.result.content[0].text).command, "graph");
+      assert.match(find.result.content[0].text, /^\[indexing\]/);
 
       assert.deepEqual(seen[0], {
         command: "find",
@@ -188,6 +199,7 @@ test("tools map 1:1 onto daemon find/grep/graph requests", async () => {
         glob: "**/*.ts",
         context: 1,
         root: "/repo",
+        limit: 8,
       });
       assert.deepEqual(seen[2], {
         command: "graph",
@@ -393,9 +405,50 @@ test("tool schemas do not mention a workspace path env", async () => {
     const listed = await waitFor((message) => message.id === 2);
     const blob = JSON.stringify(listed.result.tools);
     assert.equal(blob.includes("CODEQ_CWD"), false);
+    const grep = listed.result.tools.find((tool) => tool.name === "grep");
+    assert.equal(Boolean(grep.inputSchema.properties.limit), true);
+    assert.equal(Boolean(grep.inputSchema.properties.detail), true);
     for (const tool of listed.result.tools) {
       assert.equal(Boolean(tool.inputSchema.properties.path), true);
       assert.equal(Boolean(tool.inputSchema.properties.root), true);
     }
   });
+});
+
+test("MCP replies start with freshness and keep a graph budget", async () => {
+  await withServer(
+    {
+      query: async () => ({
+        status: "degraded",
+        warning: "stale",
+        lastSuccessfulSync: "2026-09-21T10:00:00.000Z",
+        root: "/repo",
+        result: `src/app.ts\n${"line\n".repeat(900)}`,
+      }),
+    },
+    async ({ send, waitFor }) => {
+      send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-03-26", capabilities: {} },
+      });
+      await waitFor((message) => message.id === 1);
+      send({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "graph", arguments: { query: "auth" } },
+      });
+      const graph = await waitFor((message) => message.id === 2);
+      assert.match(
+        graph.result.content[0].text,
+        /^\[degraded\] root \/repo lastSuccessfulSync /,
+      );
+      const payload = parseMcpToolText(graph.result.content[0].text);
+      assert.equal(payload.truncated, true);
+      assert.equal(payload.result, undefined);
+      assert.match(payload.hint, /detail: "full"/);
+    },
+  );
 });

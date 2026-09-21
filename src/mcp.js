@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { queryDaemon } from "./client.js";
+import { formatMcpToolResult, MCP_INSTRUCTIONS } from "./mcp-format.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -31,6 +32,19 @@ const CWD_PROPERTY = {
     "Working directory for resolving relative path/root. Defaults to the MCP client's session workspace (roots/list) or process.cwd().",
 };
 
+const LIMIT_PROPERTY = {
+  type: "integer",
+  minimum: 1,
+  description: "Maximum number of matches to return",
+};
+
+const DETAIL_PROPERTY = {
+  type: "string",
+  enum: ["summary", "full"],
+  description:
+    'summary (default) returns freshness, a short summary, and paths. full returns complete match text or the full graph dump.',
+};
+
 const TOOLS = [
   {
     name: "find",
@@ -47,11 +61,8 @@ const TOOLS = [
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
         cwd: CWD_PROPERTY,
-        limit: {
-          type: "integer",
-          minimum: 1,
-          description: "Maximum number of file matches to return",
-        },
+        limit: LIMIT_PROPERTY,
+        detail: DETAIL_PROPERTY,
       },
       required: ["query"],
     },
@@ -65,13 +76,13 @@ const TOOLS = [
     name: "grep",
     title: "Search file contents",
     description:
-      "Search file contents using the local codeq index (FFF). Indexes the selected root automatically on first use; never ask the user to init. Pass path or root to search a different repository. Each call uses exactly one root; results from multiple repositories are never merged.",
+      "Search file contents using the local codeq index (FFF). Auto-detects regex, retries as fuzzy on zero literal hits, and rejects all-match patterns like .*. Indexes the selected root automatically on first use; never ask the user to init. Pass path or root to search a different repository. Each call uses exactly one root; results from multiple repositories are never merged.",
     inputSchema: {
       type: "object",
       properties: {
         pattern: {
           type: "string",
-          description: "Text pattern to search for",
+          description: "Text or regex pattern to search for",
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
@@ -85,6 +96,8 @@ const TOOLS = [
           minimum: 0,
           description: "Number of context lines before and after each match",
         },
+        limit: LIMIT_PROPERTY,
+        detail: DETAIL_PROPERTY,
       },
       required: ["pattern"],
     },
@@ -98,7 +111,7 @@ const TOOLS = [
     name: "graph",
     title: "Explore the code graph",
     description:
-      "Explore related symbols and files with CodeGraph explore. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass path or root to query a different repository. Each call uses exactly one root.",
+      "Explore related symbols and files with CodeGraph explore. The reply already includes callers, call paths, and blast radius — do not look for a callers tool. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass path or root to query a different repository. Each call uses exactly one root. Default detail is a summary plus paths; pass detail full for the complete dump.",
     inputSchema: {
       type: "object",
       properties: {
@@ -110,6 +123,7 @@ const TOOLS = [
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
         cwd: CWD_PROPERTY,
+        detail: DETAIL_PROPERTY,
       },
       required: ["query"],
     },
@@ -238,6 +252,9 @@ function toolRequest(name, args, cwd) {
     if (args.context !== undefined) {
       request.context = positiveInteger(args.context, "context", true);
     }
+    if (args.limit !== undefined) {
+      request.limit = positiveInteger(args.limit, "limit");
+    }
     return request;
   }
   if (name === "graph") {
@@ -339,9 +356,11 @@ export function createMcpServer({
         });
       },
     });
-    const payload = { command: name, ...result };
+    const payload = formatMcpToolResult(name, result, {
+      detail: args?.detail === "full" ? "full" : "summary",
+    });
     return {
-      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+      content: [{ type: "text", text: payload.text }],
     };
   }
 
@@ -393,8 +412,7 @@ export function createMcpServer({
             tools: {},
           },
           serverInfo,
-          instructions:
-            "codeq searches one local repository at a time with find, grep, and graph. Indexes are created automatically on first use. The workspace is the client session directory or process cwd. Use path or root to switch repositories; never merge results across roots, and never ask the user to init or create a .codegraph directory.",
+          instructions: MCP_INSTRUCTIONS,
         },
       });
       return;

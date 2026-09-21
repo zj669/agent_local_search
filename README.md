@@ -46,6 +46,13 @@ The MCP tools are `find`, `grep`, and `graph`. They reuse the same user-level
 daemon as the CLI, index a root automatically on first use, and accept `path` /
 `root` to switch repositories. A call always searches exactly one root.
 
+`grep` auto-detects regex, retries as fuzzy when a literal search has zero
+hits, and rejects all-match patterns such as `.*`. Both CLI and MCP accept
+`--limit` / `limit`. MCP replies start with index freshness (`ready` /
+`indexing` / `degraded` and `lastSuccessfulSync`) and default to a short
+summary plus paths; pass `detail: "full"` for complete match text or the full
+graph dump.
+
 Workspace discovery matches the FFF plugin in pi (`@ff-labs/pi-fff`): no
 project-path env var. The server uses the MCP client's session workspace
 (`roots/list`) when the client provides it, otherwise `process.cwd()`. The
@@ -88,7 +95,7 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.
 
 ```text
 codeq [--root PATH] [--json] find  <query>   [--path PATH] [--limit N]
-codeq [--root PATH] [--json] grep  <pattern> [--path PATH] [--glob GLOB] [--context N]
+codeq [--root PATH] [--json] grep  <pattern> [--path PATH] [--glob GLOB] [--context N] [--limit N]
 codeq [--root PATH] [--json] graph <query>   [--path PATH]
 codeq mcp
 ```

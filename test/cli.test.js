@@ -23,6 +23,7 @@ test("CLI help includes mcp and the three query commands", () => {
   assert.match(stdout, /codeq mcp/);
   assert.match(stdout, /find/);
   assert.match(stdout, /grep/);
+  assert.match(stdout, /--limit N/);
   assert.match(stdout, /graph/);
 });
 
