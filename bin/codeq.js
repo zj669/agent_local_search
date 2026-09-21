@@ -5,7 +5,7 @@ import { runMcpServer } from "../src/mcp.js";
 
 const USAGE = `Usage:
   codeq [--root PATH] [--json] find  <query>   [--path PATH] [--limit N]
-  codeq [--root PATH] [--json] grep  <pattern> [--path PATH] [--glob GLOB] [--context N]
+  codeq [--root PATH] [--json] grep  <pattern> [--path PATH] [--glob GLOB] [--context N] [--limit N]
   codeq [--root PATH] [--json] graph <query>   [--path PATH]
   codeq mcp`;
 
@@ -13,7 +13,9 @@ const MCP_USAGE = `Usage:
   codeq mcp
 
 Run a stdio MCP server that exposes find, grep, and graph. The server reuses
-the per-user codeq daemon and indexes a root automatically on first use.`;
+the per-user codeq daemon and indexes a root automatically on first use.
+The workspace is the MCP client's session directory (roots/list) or process
+cwd; pass path or root to search a different repository.`;
 
 function fail(message, code = 2) {
   process.stderr.write(`codeq: ${message}\n\n${USAGE}\n`);
@@ -77,7 +79,7 @@ function parseArguments(argv) {
 
   const valid = {
     find: new Set(["root", "path", "limit"]),
-    grep: new Set(["root", "path", "glob", "context"]),
+    grep: new Set(["root", "path", "glob", "context", "limit"]),
     graph: new Set(["root", "path"]),
   }[command];
   for (const key of ["root", "path", "limit", "glob", "context"]) {
@@ -95,7 +97,10 @@ function parseArguments(argv) {
 }
 
 function printStatus(result) {
-  process.stderr.write(`[${result.status}] root ${result.root}\n`);
+  const sync = result.lastSuccessfulSync
+    ? ` lastSuccessfulSync ${result.lastSuccessfulSync}`
+    : "";
+  process.stderr.write(`[${result.status}] root ${result.root}${sync}\n`);
   if (result.warning) process.stderr.write(`warning: ${result.warning}\n`);
 }
 
@@ -107,6 +112,9 @@ function printHuman(command, result) {
     return;
   }
   if (command === "grep") {
+    if (result.fuzzyFallback) {
+      process.stderr.write("warning: 0 exact matches; showing fuzzy matches\n");
+    }
     for (const item of result.results) {
       for (let i = 0; i < item.contextBefore.length; i += 1) {
         const line = item.line - item.contextBefore.length + i;

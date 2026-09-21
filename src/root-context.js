@@ -5,6 +5,11 @@ import { existsSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { FileFinder } from "@ff-labs/fff-node";
+import {
+  detectGrepMode,
+  isWildcardOnlyPattern,
+  wildcardPatternError,
+} from "./grep-mode.js";
 import { rootBucket } from "./paths.js";
 
 const require = createRequire(import.meta.url);
@@ -49,6 +54,7 @@ export class RootContext {
     this.graphPending = new Map();
     this.graphSequence = 0;
     this.graphProgressListeners = new Set();
+    this.fffUnwatch = null;
     this.fffPromise = this.#initializeFff();
     this.graphPromise = null;
   }
@@ -77,6 +83,7 @@ export class RootContext {
       aiMode: true,
     });
     this.finder = unwrap(created, "FFF initialization failed");
+    this.#subscribeFffWatch();
     const scanned = unwrap(
       await this.finder.waitForIndexReady(60_000),
       "FFF initial scan failed",
@@ -84,8 +91,40 @@ export class RootContext {
     if (!scanned) {
       this.warning = "FFF initial scan is still running";
     }
+    this.#noteFffFreshness(this.finder);
     this.#refreshStatus();
     return this.finder;
+  }
+
+  #subscribeFffWatch() {
+    if (!this.finder?.watch) return;
+    const watched = this.finder.watch((events) => {
+      if (!events?.some((event) => event.kind === "rescan")) return;
+      this.warning = "FFF missed filesystem events and is rescanning";
+      this.#refreshStatus();
+      try {
+        this.finder.scanFiles();
+      } catch {}
+    });
+    if (watched.ok) this.fffUnwatch = watched.value;
+  }
+
+  #noteFffFreshness(finder) {
+    const progressResult = finder.getScanProgress?.();
+    if (!progressResult?.ok) return;
+    const snap = progressResult.value;
+    if (snap.isScanning) return;
+    if (this.warning === "FFF initial scan is still running") {
+      this.warning = null;
+    }
+    if (snap.isWatcherReady === false) {
+      this.warning = this.warning || "FFF watcher is not covering this root";
+    } else if (this.warning === "FFF watcher is not covering this root") {
+      this.warning = null;
+    }
+    if (snap.isWatcherReady && !this.lastSuccessfulSync) {
+      this.lastSuccessfulSync = new Date().toISOString();
+    }
   }
 
   #refreshStatus() {
@@ -220,6 +259,7 @@ export class RootContext {
   }
 
   metadata() {
+    if (this.finder) this.#noteFffFreshness(this.finder);
     this.#refreshStatus();
     return {
       root: this.root,
@@ -252,21 +292,43 @@ export class RootContext {
   }
 
   async grep(pattern, options) {
+    if (isWildcardOnlyPattern(pattern)) {
+      throw new Error(wildcardPatternError(pattern));
+    }
+    const finder = await this.fffPromise;
     const constraints = [];
     if (options.constraint) constraints.push(options.constraint);
     if (options.glob) constraints.push(options.glob);
-    constraints.push(pattern);
-    const value = unwrap(
-      (await this.fffPromise).grep(constraints.join(" "), {
-        mode: "plain",
-        pageSize: options.limit,
-        beforeContext: options.context,
-        afterContext: options.context,
-      }),
-      "FFF content search failed",
-    );
+    const query = [...constraints, pattern].join(" ");
+    const mode = detectGrepMode(pattern);
+    const grepOptions = {
+      mode,
+      smartCase: true,
+      pageSize: options.limit,
+      beforeContext: options.context,
+      afterContext: options.context,
+    };
+    let value = unwrap(finder.grep(query, grepOptions), "FFF content search failed");
+    let fuzzyFallback = false;
+    if (value.items.length === 0 && mode !== "regex") {
+      const fuzzy = unwrap(
+        finder.grep(query, {
+          ...grepOptions,
+          mode: "fuzzy",
+          beforeContext: 0,
+          afterContext: 0,
+        }),
+        "FFF fuzzy content search failed",
+      );
+      if (fuzzy.items.length > 0) {
+        value = fuzzy;
+        fuzzyFallback = true;
+      }
+    }
     return {
       ...this.metadata(),
+      mode: fuzzyFallback ? "fuzzy" : mode,
+      fuzzyFallback,
       total: value.totalMatched,
       results: value.items.map((item) => ({
         path: item.relativePath,
@@ -297,6 +359,10 @@ export class RootContext {
   }
 
   dispose() {
+    try {
+      this.fffUnwatch?.();
+    } catch {}
+    this.fffUnwatch = null;
     try {
       this.finder?.destroy();
     } catch {}

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createFramedParser, encodeMessage } from "../src/mcp.js";
+import { parseMcpToolText } from "../src/mcp-format.js";
 
 const bin = fileURLToPath(new URL("../bin/codeq.js", import.meta.url));
 
@@ -48,7 +49,7 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
   const child = spawn(process.execPath, [bin, "mcp"], {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: repo,
-    env: { ...process.env, CODEQ_DATA_DIR: dataDir, CODEQ_CWD: repo },
+    env: { ...process.env, CODEQ_DATA_DIR: dataDir },
   });
   t.after(() => {
     child.kill("SIGTERM");
@@ -90,7 +91,7 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
     jsonrpc: "2.0",
     id: 3,
     method: "tools/call",
-    params: { name: "grep", arguments: { pattern: "createSession" } },
+    params: { name: "grep", arguments: { pattern: "createSess.*" } },
   });
   send({
     jsonrpc: "2.0",
@@ -98,21 +99,37 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
     method: "tools/call",
     params: { name: "graph", arguments: { query: "createSession" } },
   });
+  send({
+    jsonrpc: "2.0",
+    id: 5,
+    method: "tools/call",
+    params: { name: "grep", arguments: { pattern: ".*" } },
+  });
 
   const find = await waitFor(messages, (message) => message.id === 2, 30_000);
   const grep = await waitFor(messages, (message) => message.id === 3, 30_000);
   const graph = await waitFor(messages, (message) => message.id === 4, 120_000);
+  const wildcard = await waitFor(messages, (message) => message.id === 5, 10_000);
 
-  const findPayload = JSON.parse(find.result.content[0].text);
-  const grepPayload = JSON.parse(grep.result.content[0].text);
-  const graphPayload = JSON.parse(graph.result.content[0].text);
+  const findPayload = parseMcpToolText(find.result.content[0].text);
+  const grepPayload = parseMcpToolText(grep.result.content[0].text);
+  const graphPayload = parseMcpToolText(graph.result.content[0].text);
 
   assert.equal(find.result.isError, undefined);
   assert.equal(grep.result.isError, undefined);
   assert.equal(graph.result.isError, undefined);
+  assert.match(find.result.content[0].text, /^\[(ready|indexing|degraded)\]/);
+  assert.match(find.result.content[0].text, /lastSuccessfulSync|root /);
   assert.equal(findPayload.command, "find");
-  assert.ok(findPayload.results.some((item) => item.path.endsWith("session.ts")));
+  assert.ok(findPayload.paths?.some((item) => item.endsWith("session.ts")));
   assert.ok(grepPayload.results.some((item) => item.path.endsWith("session.ts")));
-  assert.ok(String(graphPayload.result).includes("createSession"));
+  assert.equal(grepPayload.mode, "regex");
+  assert.ok(
+    String(graphPayload.result || graphPayload.summary || "").includes(
+      "createSession",
+    ),
+  );
+  assert.equal(wildcard.result.isError, true);
+  assert.match(wildcard.result.content[0].text, /matches everything/);
   assert.equal(existsSync(join(repo, ".codegraph")), false);
 });

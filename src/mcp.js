@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { queryDaemon } from "./client.js";
+import { formatMcpToolResult, MCP_INSTRUCTIONS } from "./mcp-format.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -10,6 +11,39 @@ const PROTOCOL_VERSIONS = [
   "2025-03-26",
   "2024-11-05",
 ];
+
+const ROOTS_LIST_TIMEOUT_MS = 5_000;
+
+const PATH_PROPERTY = {
+  type: "string",
+  description:
+    "Optional path constraint relative to the session cwd. Workspace-relative paths stay on the current root; absolute, ~/, and ../ paths that leave the workspace switch to that repository. Each call uses exactly one root.",
+};
+
+const ROOT_PROPERTY = {
+  type: "string",
+  description:
+    "Optional explicit index root. Overrides Git/cwd detection for this call.",
+};
+
+const CWD_PROPERTY = {
+  type: "string",
+  description:
+    "Working directory for resolving relative path/root. Defaults to the MCP client's session workspace (roots/list) or process.cwd().",
+};
+
+const LIMIT_PROPERTY = {
+  type: "integer",
+  minimum: 1,
+  description: "Maximum number of matches to return",
+};
+
+const DETAIL_PROPERTY = {
+  type: "string",
+  enum: ["summary", "full"],
+  description:
+    'summary (default) returns freshness, a short summary, and paths. full returns complete match text or the full graph dump.',
+};
 
 const TOOLS = [
   {
@@ -24,26 +58,11 @@ const TOOLS = [
           type: "string",
           description: "File name or path fragment to search for",
         },
-        path: {
-          type: "string",
-          description:
-            "Optional path constraint relative to cwd. If it points at another repository, that root is used instead.",
-        },
-        root: {
-          type: "string",
-          description:
-            "Optional explicit index root. Overrides Git/cwd detection for this call.",
-        },
-        cwd: {
-          type: "string",
-          description:
-            "Working directory for resolving relative path/root. Defaults to the workspace or CODEQ_CWD.",
-        },
-        limit: {
-          type: "integer",
-          minimum: 1,
-          description: "Maximum number of file matches to return",
-        },
+        path: PATH_PROPERTY,
+        root: ROOT_PROPERTY,
+        cwd: CWD_PROPERTY,
+        limit: LIMIT_PROPERTY,
+        detail: DETAIL_PROPERTY,
       },
       required: ["query"],
     },
@@ -57,29 +76,17 @@ const TOOLS = [
     name: "grep",
     title: "Search file contents",
     description:
-      "Search file contents using the local codeq index (FFF). Indexes the selected root automatically on first use; never ask the user to init. Pass path or root to search a different repository. Each call uses exactly one root; results from multiple repositories are never merged.",
+      "Search file contents using the local codeq index (FFF). Auto-detects regex, retries as fuzzy on zero literal hits, and rejects all-match patterns like .*. Indexes the selected root automatically on first use; never ask the user to init. Pass path or root to search a different repository. Each call uses exactly one root; results from multiple repositories are never merged.",
     inputSchema: {
       type: "object",
       properties: {
         pattern: {
           type: "string",
-          description: "Text pattern to search for",
+          description: "Text or regex pattern to search for",
         },
-        path: {
-          type: "string",
-          description:
-            "Optional path constraint relative to cwd. If it points at another repository, that root is used instead.",
-        },
-        root: {
-          type: "string",
-          description:
-            "Optional explicit index root. Overrides Git/cwd detection for this call.",
-        },
-        cwd: {
-          type: "string",
-          description:
-            "Working directory for resolving relative path/root. Defaults to the workspace or CODEQ_CWD.",
-        },
+        path: PATH_PROPERTY,
+        root: ROOT_PROPERTY,
+        cwd: CWD_PROPERTY,
         glob: {
           type: "string",
           description: "Optional glob used to constrain matches, for example **/*.ts",
@@ -89,6 +96,8 @@ const TOOLS = [
           minimum: 0,
           description: "Number of context lines before and after each match",
         },
+        limit: LIMIT_PROPERTY,
+        detail: DETAIL_PROPERTY,
       },
       required: ["pattern"],
     },
@@ -102,7 +111,7 @@ const TOOLS = [
     name: "graph",
     title: "Explore the code graph",
     description:
-      "Explore related symbols and files with CodeGraph explore. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass path or root to query a different repository. Each call uses exactly one root.",
+      "Explore related symbols and files with CodeGraph explore. The reply already includes callers, call paths, and blast radius — do not look for a callers tool. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass path or root to query a different repository. Each call uses exactly one root. Default detail is a summary plus paths; pass detail full for the complete dump.",
     inputSchema: {
       type: "object",
       properties: {
@@ -111,21 +120,10 @@ const TOOLS = [
           description:
             "Natural-language or symbol query for related code and relationships",
         },
-        path: {
-          type: "string",
-          description:
-            "Optional path constraint relative to cwd. If it points at another repository, that root is used instead.",
-        },
-        root: {
-          type: "string",
-          description:
-            "Optional explicit index root. Overrides Git/cwd detection for this call.",
-        },
-        cwd: {
-          type: "string",
-          description:
-            "Working directory for resolving relative path/root. Defaults to the workspace or CODEQ_CWD.",
-        },
+        path: PATH_PROPERTY,
+        root: ROOT_PROPERTY,
+        cwd: CWD_PROPERTY,
+        detail: DETAIL_PROPERTY,
       },
       required: ["query"],
     },
@@ -197,7 +195,6 @@ function parseContentLength(header) {
 
 function defaultCwd(override) {
   if (override) return override;
-  if (process.env.CODEQ_CWD) return process.env.CODEQ_CWD;
   return process.cwd();
 }
 
@@ -255,6 +252,9 @@ function toolRequest(name, args, cwd) {
     if (args.context !== undefined) {
       request.context = positiveInteger(args.context, "context", true);
     }
+    if (args.limit !== undefined) {
+      request.limit = positiveInteger(args.limit, "limit");
+    }
     return request;
   }
   if (name === "graph") {
@@ -302,10 +302,18 @@ export function createMcpServer({
     send(message);
   }
 
-  async function requestClient(method, params) {
+  async function requestClient(method, params, timeoutMs) {
     const id = `codeq-${nextServerId++}`;
     const result = new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const waiter = { resolve, reject };
+      if (timeoutMs) {
+        waiter.timer = setTimeout(() => {
+          if (!pending.has(id)) return;
+          pending.delete(id);
+          reject(new Error(`${method} timeout`));
+        }, timeoutMs);
+      }
+      pending.set(id, waiter);
     });
     send({ jsonrpc: "2.0", id, method, params });
     return result;
@@ -314,7 +322,11 @@ export function createMcpServer({
   async function refreshRoots() {
     if (!clientSupportsRoots) return;
     try {
-      const result = await requestClient("roots/list");
+      const result = await requestClient(
+        "roots/list",
+        undefined,
+        ROOTS_LIST_TIMEOUT_MS,
+      );
       const root = result?.roots?.find((entry) => entry?.uri?.startsWith("file:"));
       const path = fileUriToPath(root?.uri);
       if (path) workspaceCwd = path;
@@ -344,9 +356,11 @@ export function createMcpServer({
         });
       },
     });
-    const payload = { command: name, ...result };
+    const payload = formatMcpToolResult(name, result, {
+      detail: args?.detail === "full" ? "full" : "summary",
+    });
     return {
-      content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+      content: [{ type: "text", text: payload.text }],
     };
   }
 
@@ -360,6 +374,7 @@ export function createMcpServer({
       const waiter = pending.get(message.id);
       if (!waiter) return;
       pending.delete(message.id);
+      if (waiter.timer) clearTimeout(waiter.timer);
       if (message.error) {
         waiter.reject(new Error(message.error.message || "client error"));
       } else {
@@ -380,6 +395,10 @@ export function createMcpServer({
       rootsPromise = refreshRoots();
       return;
     }
+    if (method === "notifications/roots/list_changed") {
+      rootsPromise = refreshRoots();
+      return;
+    }
     if (isNotification) return;
 
     if (method === "initialize") {
@@ -393,8 +412,7 @@ export function createMcpServer({
             tools: {},
           },
           serverInfo,
-          instructions:
-            "codeq searches one local repository at a time with find, grep, and graph. Indexes are created automatically on first use. Use path or root to switch repositories; never merge results across roots, and never ask the user to init or create a .codegraph directory.",
+          instructions: MCP_INSTRUCTIONS,
         },
       });
       return;
