@@ -2,6 +2,7 @@ import {
   exactHits,
   parseExploreDump,
   queryIdentifiers,
+  rankFiles,
   symbolLabel,
 } from "./graph-map.js";
 
@@ -9,7 +10,11 @@ const MAP_FILES = 12;
 const MAP_SYMBOLS = 4;
 const MAP_BLAST = 5;
 const MAP_FOLDED_NAMES = 6;
+const MAP_TOPICS = 3;
 const MATCH_TEXT_CHARS = 200;
+// Layer 1 has to pay for itself: grep spends it on context lines, so detail
+// "full" without an explicit context still gets some.
+export const FULL_GREP_CONTEXT = 2;
 const GRAPH_MAP_CHARS = 1_500;
 const GRAPH_SOURCE_CHARS = 16_000;
 
@@ -22,7 +27,7 @@ When to use which tool:
 
 Indexing starts on tools/call, never on initialize or tools/list. Prefer roots/list when the client gives a real project folder (not $HOME or /); otherwise use process.cwd() if that is a project. If the server was spawned from $HOME, pass path or root on the call. Each call uses exactly one root.
 
-root and path are not interchangeable. root is the repository, checkout, or worktree to search: pass it whenever the question is about a repository other than the session cwd. path narrows inside that repository and takes a directory or a single file. A subdirectory passed as root builds a second index of that subdirectory instead of narrowing, and a file passed as root falls back to the repository holding it; both cases say so in the reply.
+root and path are not interchangeable, but only root selects an index. root is the repository, checkout, or worktree to search: pass it whenever the question is about a repository other than the session cwd. path narrows that one call inside the selected repository and takes a directory or a single file; it never builds or switches an index, so any number of paths share one index per repository. A relative path is joined to the selected root, not to the session cwd, and a path that does not exist is an error naming the absolute path that was tried — never a silent whole-repository search. A subdirectory or file passed as root resolves to the repository that holds it, narrowed to that subdirectory or file; the reply's first line says so.
 
 Every reply names the resolved absolute root and where it came from: "root <abs> via root argument", "via path argument", or "via cwd (roots/list | spawn cwd | cwd argument | shell cwd)", followed by a parenthesised note when root was not a repository checkout. Read that line. When the root is not the repository you asked about — the usual cause is omitting root while working across two repositories — retry the same call with root set to that repository instead of interpreting the result.
 
@@ -286,7 +291,7 @@ function fileLine(file, index, hitLines) {
   return `${index}. ${file.path}${anchor ? `:${anchor}` : ""}${symbols}${rendered}`;
 }
 
-function graphMap(result, dump, identifiers, hits, fileCap) {
+function graphMap(result, dump, identifiers, hits, ranked, fileCap) {
   const lines = [];
   const query = result.query ?? "";
   const scale =
@@ -340,7 +345,7 @@ function graphMap(result, dump, identifiers, hits, fileCap) {
     if (hit.line && !hitLines.has(hit.path)) hitLines.set(hit.path, hit.line);
   }
 
-  const shownFiles = dump.files.slice(0, fileCap);
+  const shownFiles = ranked.files.slice(0, fileCap);
   lines.push("");
   if (shownFiles.length === 0) {
     lines.push(
@@ -352,11 +357,34 @@ function graphMap(result, dump, identifiers, hits, fileCap) {
     shownFiles.forEach((file, index) => {
       lines.push(fileLine(file, index + 1, hitLines));
     });
-    if (dump.files.length > shownFiles.length) {
+    if (ranked.files.length > shownFiles.length) {
       lines.push(
-        `+${dump.files.length - shownFiles.length} more files the engine rendered — detail:"full"`,
+        `+${ranked.files.length - shownFiles.length} more files the engine rendered — detail:"full"`,
       );
     }
+  }
+
+  if (ranked.folded.length > 0) {
+    lines.push(
+      "",
+      `also ranked, on shorter tokens than ${identifiers.join(", ")}: ${ranked.folded
+        .slice(0, MAP_FOLDED_NAMES)
+        .map((file) => file.path)
+        .join(", ")}${
+        ranked.folded.length > MAP_FOLDED_NAMES
+          ? ` +${ranked.folded.length - MAP_FOLDED_NAMES}`
+          : ""
+      } — detail:"full" expands them.`,
+    );
+  }
+
+  if (identifiers.length >= MAP_TOPICS) {
+    lines.push(
+      "",
+      `this query names ${identifiers.length} topics (${identifiers.join(
+        ", ",
+      )}), so the map covers all of them — call one identifier per query for a narrow map.`,
+    );
   }
 
   const wanted = new Set(identifiers.map((name) => name.toLowerCase()));
@@ -390,15 +418,16 @@ function graphMap(result, dump, identifiers, hits, fileCap) {
     );
   }
 
-  return { lines, folded, related, shownFiles };
+  return { lines, folded, related, shownFiles, foldedFiles: ranked.folded };
 }
 
-function graphSource(dump, hits) {
-  const targets = new Set(hits.map((hit) => hit.path));
-  const ordered = [
-    ...dump.files.filter((file) => targets.has(file.path)),
-    ...dump.files.filter((file) => !targets.has(file.path)),
-  ].filter((file) => file.source.length > 0);
+function graphSource(dump, ranked) {
+  const order = new Map(ranked.files.map((file, index) => [file.path, index]));
+  const ordered = dump.files
+    .filter((file) => file.source.length > 0)
+    .map((file, index) => ({ file, rank: order.get(file.path) ?? order.size + index }))
+    .sort((a, b) => a.rank - b.rank)
+    .map((entry) => entry.file);
 
   const kept = [];
   const omitted = [];
@@ -425,16 +454,17 @@ function formatGraph(result, full) {
   const dump = parseExploreDump(result.result);
   const identifiers = queryIdentifiers(result.query);
   const hits = exactHits(dump, identifiers);
+  const ranked = rankFiles(dump, hits, identifiers);
   // The budget is spent by dropping whole file entries, never by cutting
   // characters: a half-written path is worse than an honest "+N more files".
   let fileCap = MAP_FILES;
-  let map = graphMap(result, dump, identifiers, hits, fileCap);
+  let map = graphMap(result, dump, identifiers, hits, ranked, fileCap);
   while (map.lines.join("\n").length > GRAPH_MAP_CHARS && fileCap > 3) {
     fileCap -= 1;
-    map = graphMap(result, dump, identifiers, hits, fileCap);
+    map = graphMap(result, dump, identifiers, hits, ranked, fileCap);
   }
   const lines = [...map.lines];
-  const source = full ? graphSource(dump, hits) : { kept: [], omitted: [] };
+  const source = full ? graphSource(dump, ranked) : { kept: [], omitted: [] };
   const dumpSize = String(result.result ?? "").length;
 
   // This hook is part of layer 0 and is repeated verbatim by layer 1, which
@@ -485,6 +515,7 @@ function formatGraph(result, full) {
       paths: map.shownFiles.map((file) => file.path),
       alsoRanked: uniquePaths([
         ...map.folded.map((entry) => entry.name),
+        ...map.foldedFiles.map((file) => file.path),
         ...dump.pointers.map((pointer) => pointer.path),
       ]),
       omitted: {

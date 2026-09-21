@@ -1,7 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { queryDaemon } from "./client.js";
-import { formatMcpToolResult, MCP_INSTRUCTIONS } from "./mcp-format.js";
+import {
+  formatMcpToolResult,
+  FULL_GREP_CONTEXT,
+  MCP_INSTRUCTIONS,
+} from "./mcp-format.js";
 import { isUnusableWorkspace } from "./paths.js";
 
 const require = createRequire(import.meta.url);
@@ -419,6 +423,8 @@ function toolRequest(name, args, cwd) {
     if (args.fuzzy !== undefined) request.fuzzy = Boolean(args.fuzzy);
     if (args.context !== undefined) {
       request.context = positiveInteger(args.context, "context", true);
+    } else if (args.detail === "full") {
+      request.context = FULL_GREP_CONTEXT;
     }
     if (args.limit !== undefined) {
       request.limit = positiveInteger(args.limit, "limit");

@@ -212,6 +212,55 @@ export function parseExploreDump(text) {
   return dump;
 }
 
+const PATH_IN_TEXT = /(?:[\w.@+-]+\/)+[\w.@+-]+\.\w+/g;
+
+// The engine seeds its search by splitting format_chat_details into format, chat
+// and details, so its render order puts whatever matched a short token first.
+// Layer 0 ranks by the identifier that was actually asked for: its definition
+// site, then the files the blast radius ties to it, then everything else.
+export function rankFiles(dump, hits, identifiers) {
+  const wanted = new Set(identifiers.map((name) => name.toLowerCase()));
+  const rendered = new Map(dump.files.map((file) => [file.path, file]));
+  const files = [];
+  const taken = new Set();
+  const add = (file) => {
+    if (!file || taken.has(file.path)) return;
+    taken.add(file.path);
+    files.push(file);
+  };
+
+  for (const hit of hits) {
+    if (!hit.path) continue;
+    // The engine can name a definition site it never rendered a section for.
+    // It is still the first file to open.
+    add(
+      rendered.get(hit.path) || {
+        path: hit.path,
+        header: null,
+        symbols: [{ name: hit.symbol, kind: null }],
+        symbolCount: 1,
+        renderedLines: null,
+        language: "",
+        source: [],
+      },
+    );
+  }
+  for (const file of dump.files) {
+    if (file.symbols.some((symbol) => wanted.has(symbol.name.toLowerCase()))) add(file);
+  }
+  if (files.length === 0) return { files: dump.files, folded: [] };
+
+  const linked = new Set();
+  for (const entry of dump.blast) {
+    if (!wanted.has(entry.name.toLowerCase())) continue;
+    for (const path of entry.detail.match(PATH_IN_TEXT) || []) linked.add(path);
+  }
+  for (const file of dump.files) {
+    if (linked.has(file.path)) add(file);
+  }
+  return { files, folded: dump.files.filter((file) => !taken.has(file.path)) };
+}
+
 export function exactHits(dump, identifiers, cap = 3) {
   const wanted = new Map(identifiers.map((name) => [name.toLowerCase(), name]));
   const hits = [];
