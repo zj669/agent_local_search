@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { resolveRequestRoot, unsafeRootReason } from "../src/paths.js";
+import { resolveRequestRoot, unsafeRootReason, isUnusableWorkspace } from "../src/paths.js";
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -65,4 +65,8 @@ test("a linked worktree resolves to its own checkout", async () => {
 test("refuses the filesystem root and home directory", () => {
   assert.equal(unsafeRootReason("/"), "the filesystem root");
   assert.equal(unsafeRootReason(homedir()), "your home directory");
+  assert.equal(isUnusableWorkspace("/"), true);
+  assert.equal(isUnusableWorkspace(homedir()), true);
+  assert.equal(isUnusableWorkspace("${workspaceFolder}"), true);
+  assert.equal(isUnusableWorkspace(""), true);
 });

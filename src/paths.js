@@ -102,6 +102,13 @@ export function unsafeRootReason(root) {
   return null;
 }
 
+export function isUnusableWorkspace(dir) {
+  if (dir == null) return true;
+  const value = String(dir).trim();
+  if (value === "" || value.includes("${")) return true;
+  return Boolean(unsafeRootReason(value));
+}
+
 export async function resolveRequestRoot(request) {
   const cwd = canonical(request.cwd || process.cwd());
   const targetAbsolute = request.path ? expandPath(request.path, cwd) : cwd;

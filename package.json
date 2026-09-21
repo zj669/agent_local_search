@@ -1,11 +1,12 @@
 {
   "name": "@zj669/codeq",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Local file, text, and code-graph search from a CLI or MCP server",
   "type": "module",
   "mcpName": "io.github.zj669/codeq",
   "bin": {
-    "codeq": "./bin/codeq.js"
+    "codeq": "./bin/codeq.js",
+    "codeq-mcp": "./bin/codeq-mcp"
   },
   "files": [
     "bin",

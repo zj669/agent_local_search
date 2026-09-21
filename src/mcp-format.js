@@ -9,7 +9,7 @@ When to use which tool:
 - find: file names and paths.
 - grep: file contents. Patterns may be literal or regex (auto-detected). All-match patterns like .* are rejected. Prefer a concrete identifier.
 
-Workspace is the MCP client's session directory (roots/list) or process.cwd(), matching the FFF plugin in pi. Pass path or root to search a different repository. Each call uses exactly one root.
+Indexing starts on tools/call, never on initialize or tools/list. Prefer roots/list when the client gives a real project folder (not $HOME or /); otherwise use process.cwd() if that is a project. If the server was spawned from $HOME, pass path or root on the call. Pass path or root to search a different repository. Each call uses exactly one root.
 
 Default replies start with a freshness line, then a short summary and paths. Pass detail: "full" when you need complete match text or the full graph dump. If truncated is true, more remains — request detail "full" instead of guessing.`;
 
