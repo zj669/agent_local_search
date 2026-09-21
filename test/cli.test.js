@@ -91,3 +91,35 @@ test("codeq mcp speaks framed JSON-RPC on stdio", async () => {
     { tools: {} },
   );
 });
+
+test("codeq mcp replies to OpenCode NDJSON initialize without Content-Length", async () => {
+  const { spawn } = await import("node:child_process");
+  const child = spawn(process.execPath, [bin, "mcp"], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = Buffer.alloc(0);
+  child.stdout.on("data", (chunk) => {
+    stdout = Buffer.concat([stdout, chunk]);
+  });
+  child.stdin.write(
+    Buffer.from(
+      "7b226d6574686f64223a22696e697469616c697a65222c22706172616d73223a7b2270726f746f636f6c56657273696f6e223a22323032352d31312d3235222c226361706162696c6974696573223a7b22726f6f7473223a7b7d7d2c22636c69656e74496e666f223a7b226e616d65223a226f70656e636f6465222c2276657273696f6e223a22312e31382e3331227d7d2c226a736f6e727063223a22322e30222c226964223a307d0a",
+      "hex",
+    ),
+  );
+  const started = Date.now();
+  while (Date.now() - started < 2000 && !stdout.includes(0x0a)) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  child.kill("SIGTERM");
+  await new Promise((resolve) => child.once("exit", resolve));
+  const text = stdout.toString("utf8");
+  assert.notEqual(text.length, 0, "OpenCode initialize must get a stdout reply");
+  assert.equal(text.includes("Content-Length:"), false);
+  assert.match(text, /^\{/);
+  assert.match(text, /\}\n$/);
+  const reply = JSON.parse(text.trim());
+  assert.equal(reply.id, 0);
+  assert.equal(reply.result.protocolVersion, "2025-06-18");
+  assert.equal(reply.result.serverInfo.name, "codeq");
+});

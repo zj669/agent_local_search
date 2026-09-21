@@ -140,12 +140,27 @@ export function negotiateProtocolVersion(requested) {
   return PROTOCOL_VERSIONS[0];
 }
 
-export function encodeMessage(message) {
+export function encodeMessage(message, framing = "content-length") {
   const body = Buffer.from(JSON.stringify(message), "utf8");
+  if (framing === "ndjson") {
+    return Buffer.concat([body, Buffer.from("\n", "utf8")]);
+  }
+  if (framing !== "content-length") {
+    throw new Error(`unknown MCP framing: ${framing}`);
+  }
   return Buffer.concat([
     Buffer.from(`Content-Length: ${body.length}\r\n\r\n`, "utf8"),
     body,
   ]);
+}
+
+function parseJsonMessage(raw, framing) {
+  try {
+    return JSON.parse(raw.toString("utf8"));
+  } catch (error) {
+    error.framing = framing;
+    throw error;
+  }
 }
 
 export function createFramedParser(onMessage) {
@@ -153,18 +168,42 @@ export function createFramedParser(onMessage) {
   return (chunk) => {
     buffer = Buffer.concat([buffer, chunk]);
     for (;;) {
+      let start = 0;
+      while (
+        start < buffer.length &&
+        (buffer[start] === 0x0a || buffer[start] === 0x0d)
+      ) {
+        start += 1;
+      }
+      if (start > 0) buffer = buffer.subarray(start);
+      if (buffer.length === 0) return;
+
+      if (buffer[0] === 0x7b || buffer[0] === 0x5b) {
+        const newline = buffer.indexOf(0x0a);
+        if (newline < 0) return;
+        let line = buffer.subarray(0, newline);
+        if (line.length > 0 && line[line.length - 1] === 0x0d) {
+          line = line.subarray(0, line.length - 1);
+        }
+        buffer = buffer.subarray(newline + 1);
+        onMessage(parseJsonMessage(line, "ndjson"), "ndjson");
+        continue;
+      }
+
       const headerEnd = findHeaderEnd(buffer);
       if (headerEnd < 0) return;
       const header = buffer.subarray(0, headerEnd).toString("utf8");
       const length = parseContentLength(header);
       if (length === null) {
-        throw new Error("MCP message is missing Content-Length");
+        const error = new Error("MCP message is missing Content-Length");
+        error.framing = "content-length";
+        throw error;
       }
       const bodyStart = headerEnd;
       if (buffer.length < bodyStart + length) return;
       const body = buffer.subarray(bodyStart, bodyStart + length);
       buffer = buffer.subarray(bodyStart + length);
-      onMessage(JSON.parse(body.toString("utf8")));
+      onMessage(parseJsonMessage(body, "content-length"), "content-length");
     }
   };
 }
@@ -298,11 +337,7 @@ export function createMcpServer({
     version,
   };
 
-  function respond(message) {
-    send(message);
-  }
-
-  async function requestClient(method, params, timeoutMs) {
+  async function requestClient(method, params, timeoutMs, framing) {
     const id = `codeq-${nextServerId++}`;
     const result = new Promise((resolve, reject) => {
       const waiter = { resolve, reject };
@@ -315,17 +350,18 @@ export function createMcpServer({
       }
       pending.set(id, waiter);
     });
-    send({ jsonrpc: "2.0", id, method, params });
+    send({ jsonrpc: "2.0", id, method, params }, framing);
     return result;
   }
 
-  async function refreshRoots() {
+  async function refreshRoots(framing) {
     if (!clientSupportsRoots) return;
     try {
       const result = await requestClient(
         "roots/list",
         undefined,
         ROOTS_LIST_TIMEOUT_MS,
+        framing,
       );
       const root = result?.roots?.find((entry) => entry?.uri?.startsWith("file:"));
       const path = fileUriToPath(root?.uri);
@@ -333,27 +369,30 @@ export function createMcpServer({
     } catch {}
   }
 
-  async function callTool(name, args, meta, signal) {
+  async function callTool(name, args, meta, signal, framing) {
     await rootsPromise;
     const request = toolRequest(name, args ?? {}, args?.cwd || workspaceCwd);
     const result = await query(request, {
       signal,
       onProgress: (progress) => {
         if (meta?.progressToken === undefined) return;
-        send({
-          jsonrpc: "2.0",
-          method: "notifications/progress",
-          params: {
-            progressToken: meta.progressToken,
-            progress: progress.current ?? 0,
-            total: progress.total,
-            message:
-              progress.message ||
-              `${progress.phase || "indexing"}${
-                progress.total ? ` ${progress.current}/${progress.total}` : ""
-              }`,
+        send(
+          {
+            jsonrpc: "2.0",
+            method: "notifications/progress",
+            params: {
+              progressToken: meta.progressToken,
+              progress: progress.current ?? 0,
+              total: progress.total,
+              message:
+                progress.message ||
+                `${progress.phase || "indexing"}${
+                  progress.total ? ` ${progress.current}/${progress.total}` : ""
+                }`,
+            },
           },
-        });
+          framing,
+        );
       },
     });
     const payload = formatMcpToolResult(name, result, {
@@ -364,9 +403,11 @@ export function createMcpServer({
     };
   }
 
-  async function handleMessage(message) {
+  async function handleMessage(message, framing = "content-length") {
+    const reply = (payload) => send(payload, framing);
+
     if (message === null || typeof message !== "object" || Array.isArray(message)) {
-      respond(jsonRpcError(null, -32600, "invalid request"));
+      reply(jsonRpcError(null, -32600, "invalid request"));
       return;
     }
 
@@ -392,18 +433,18 @@ export function createMcpServer({
       return;
     }
     if (method === "notifications/initialized") {
-      rootsPromise = refreshRoots();
+      rootsPromise = refreshRoots(framing);
       return;
     }
     if (method === "notifications/roots/list_changed") {
-      rootsPromise = refreshRoots();
+      rootsPromise = refreshRoots(framing);
       return;
     }
     if (isNotification) return;
 
     if (method === "initialize") {
       clientSupportsRoots = Boolean(params?.capabilities?.roots);
-      respond({
+      reply({
         jsonrpc: "2.0",
         id,
         result: {
@@ -419,12 +460,12 @@ export function createMcpServer({
     }
 
     if (method === "ping") {
-      respond({ jsonrpc: "2.0", id, result: {} });
+      reply({ jsonrpc: "2.0", id, result: {} });
       return;
     }
 
     if (method === "tools/list") {
-      respond({ jsonrpc: "2.0", id, result: { tools: TOOLS } });
+      reply({ jsonrpc: "2.0", id, result: { tools: TOOLS } });
       return;
     }
 
@@ -432,7 +473,7 @@ export function createMcpServer({
       const name = params?.name;
       const args = params?.arguments ?? {};
       if (!TOOLS.some((tool) => tool.name === name)) {
-        respond({
+        reply({
           jsonrpc: "2.0",
           id,
           result: {
@@ -445,10 +486,16 @@ export function createMcpServer({
       const controller = new AbortController();
       inFlight.set(id, controller);
       try {
-        const result = await callTool(name, args, params?._meta, controller.signal);
-        respond({ jsonrpc: "2.0", id, result });
+        const result = await callTool(
+          name,
+          args,
+          params?._meta,
+          controller.signal,
+          framing,
+        );
+        reply({ jsonrpc: "2.0", id, result });
       } catch (error) {
-        respond({
+        reply({
           jsonrpc: "2.0",
           id,
           result: {
@@ -467,17 +514,17 @@ export function createMcpServer({
       return;
     }
 
-    respond(jsonRpcError(id ?? null, -32601, `method not found: ${method}`));
+    reply(jsonRpcError(id ?? null, -32601, `method not found: ${method}`));
   }
 
   return {
     attach(input, output) {
-      send = (message) => {
+      send = (message, framing = "content-length") => {
         if (output.writableEnded || output.destroyed) return;
-        output.write(encodeMessage(message));
+        output.write(encodeMessage(message, framing));
       };
-      const parse = createFramedParser((message) => {
-        handleMessage(message).catch((error) => {
+      const parse = createFramedParser((message, framing) => {
+        handleMessage(message, framing).catch((error) => {
           process.stderr.write(`codeq mcp: ${error.message}\n`);
         });
       });
@@ -485,7 +532,10 @@ export function createMcpServer({
         try {
           parse(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         } catch (error) {
-          send(jsonRpcError(null, -32700, error.message));
+          send(
+            jsonRpcError(null, -32700, error.message),
+            error.framing || "content-length",
+          );
         }
       });
     },
