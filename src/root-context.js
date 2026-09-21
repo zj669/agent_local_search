@@ -10,9 +10,12 @@ import {
   isWildcardOnlyPattern,
   wildcardPatternError,
 } from "./grep-mode.js";
+import { acquireLock } from "./lock.js";
 import { rootBucket } from "./paths.js";
 
 const require = createRequire(import.meta.url);
+
+const GRAPH_LOCK_TIMEOUT_MS = 15 * 60 * 1_000;
 
 function unwrap(result, operation) {
   if (!result.ok) throw new Error(`${operation}: ${result.error}`);
@@ -170,7 +173,23 @@ export class RootContext {
     });
   }
 
+  // Opening a graph migrates and may index the database, which one SQLite writer
+  // at a time can do. The lock lives next to the database so it covers every
+  // process that could reach the same bucket, and is released once the worker
+  // reports ready — queries after that run concurrently.
   async #initializeGraph() {
+    const held = await acquireLock(this.location.graphLock, {
+      timeoutMs: GRAPH_LOCK_TIMEOUT_MS,
+      label: `codegraph ${this.root}`,
+    });
+    try {
+      return await this.#openGraph();
+    } finally {
+      held.release?.();
+    }
+  }
+
+  async #openGraph() {
     await mkdir(this.location.graphDir, { recursive: true });
     const worker = fileURLToPath(new URL("./graph-worker.js", import.meta.url));
     this.graphProcess = spawn(
