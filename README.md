@@ -69,6 +69,21 @@ hits, and rejects all-match patterns such as `.*`. Both CLI and MCP accept
 summary plus paths; pass `detail: "full"` for complete match text or the full
 graph dump.
 
+Every reply also names the resolved absolute root and which input selected it,
+so a call that landed in the wrong repository is visible without re-deriving
+the routing:
+
+```text
+[ready] root /abs/path/to/B via root argument
+[ready] root /abs/path/to/A via cwd (roots/list)
+```
+
+The origin is `root argument`, `path argument`, or `cwd (...)` with the cwd's
+own source: `roots/list`, `spawn cwd`, `cwd argument`, or the CLI's
+`shell cwd`. MCP payloads and `--json` carry the same values as `rootSource`
+and `cwdSource`. When that root is not the repository you meant — usually from
+omitting `root` while working across two repositories — retry with `root`.
+
 ## Install, update, and uninstall
 
 Install:
@@ -98,7 +113,7 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/ma
 To pin the current GitHub release instead:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.4.tar.gz
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.5.tar.gz
 ```
 
 ## Commands

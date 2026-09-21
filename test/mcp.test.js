@@ -338,6 +338,7 @@ test("tools map 1:1 onto daemon find/grep/graph requests", async () => {
       assert.deepEqual(seen[0], {
         command: "find",
         cwd: "/tmp/workspace",
+        cwdSource: "spawn cwd",
         query: "app.ts",
         path: "src",
         limit: 5,
@@ -345,6 +346,7 @@ test("tools map 1:1 onto daemon find/grep/graph requests", async () => {
       assert.deepEqual(seen[1], {
         command: "grep",
         cwd: "/tmp/workspace",
+        cwdSource: "spawn cwd",
         query: "TODO",
         glob: "**/*.ts",
         context: 1,
@@ -354,6 +356,7 @@ test("tools map 1:1 onto daemon find/grep/graph requests", async () => {
       assert.deepEqual(seen[2], {
         command: "graph",
         cwd: "/tmp/workspace",
+        cwdSource: "spawn cwd",
         query: "auth session",
         path: "../other",
       });
@@ -436,6 +439,7 @@ test("path/root and cwd switch a single root with no fusion", async () => {
         cwd: "/repos/alpha",
         query: "main.go",
         path: "../beta",
+        cwdSource: "cwd argument",
       });
       send({
         jsonrpc: "2.0",
@@ -447,6 +451,79 @@ test("path/root and cwd switch a single root with no fusion", async () => {
       assert.equal(seen[1].cwd, "/tmp/workspace");
       assert.equal(seen[1].path, undefined);
       assert.equal(seen[1].root, undefined);
+      assert.equal(seen[1].cwdSource, "spawn cwd");
+    },
+  );
+});
+
+test("omitting root searches the spawn cwd and the reply names it", async () => {
+  const seen = [];
+  await withServer(
+    {
+      cwd: "/repos/worktree",
+      query: async (request) => {
+        seen.push(request);
+        return {
+          root: request.root || request.cwd,
+          rootSource: request.root ? "root" : "cwd",
+          cwdSource: request.cwdSource,
+          status: "ready",
+          results: [],
+          result: "graph-output",
+        };
+      },
+    },
+    async ({ send, waitFor }) => {
+      send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-03-26", capabilities: {} },
+      });
+      await waitFor((message) => message.id === 1);
+
+      send({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "graph",
+          arguments: { query: "leagent_chat get_final_answer" },
+        },
+      });
+      const defaulted = await waitFor((message) => message.id === 2);
+      const defaultedText = defaulted.result.content[0].text;
+      assert.equal(seen[0].cwd, "/repos/worktree");
+      assert.equal(seen[0].root, undefined);
+      assert.equal(
+        defaultedText.split("\n")[0],
+        "[ready] root /repos/worktree via cwd (spawn cwd)",
+      );
+      const defaultedPayload = parseMcpToolText(defaultedText);
+      assert.equal(defaultedPayload.root, "/repos/worktree");
+      assert.equal(defaultedPayload.rootSource, "cwd");
+      assert.equal(defaultedPayload.cwdSource, "spawn cwd");
+
+      send({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "graph",
+          arguments: {
+            query: "leagent_chat get_final_answer",
+            root: "/repos/leagent",
+          },
+        },
+      });
+      const retried = await waitFor((message) => message.id === 3);
+      const retriedText = retried.result.content[0].text;
+      assert.equal(seen[1].root, "/repos/leagent");
+      assert.equal(
+        retriedText.split("\n")[0],
+        "[ready] root /repos/leagent via root argument",
+      );
+      assert.equal(parseMcpToolText(retriedText).rootSource, "root");
     },
   );
 });
@@ -490,6 +567,7 @@ test("uses client roots as the session cwd, like pi-fff ctx.cwd", async () => {
       });
       await waitFor((message) => message.id === 2);
       assert.equal(seen[0].cwd, "/repos/workspace");
+      assert.equal(seen[0].cwdSource, "roots/list");
 
       send({ jsonrpc: "2.0", method: "notifications/roots/list_changed" });
       const relist = await waitFor(
@@ -562,6 +640,7 @@ test("HOME spawn handshake does not query; tools/call needs path or root", async
       assert.equal(seen.length, 1);
       assert.equal(seen[0].path, "/repos/beta");
       assert.equal(seen[0].cwd, homedir());
+      assert.equal(seen[0].cwdSource, "spawn cwd");
     },
   );
 });
@@ -671,6 +750,64 @@ test("tool schemas do not mention a workspace path env", async () => {
       assert.equal(Boolean(tool.inputSchema.properties.path), true);
       assert.equal(Boolean(tool.inputSchema.properties.root), true);
     }
+  });
+});
+
+test("instructions tell agents to check the root a reply resolved to", async () => {
+  await withServer({}, async ({ send, waitFor }) => {
+    send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-03-26", capabilities: {} },
+    });
+    const init = await waitFor((message) => message.id === 1);
+    assert.match(
+      init.result.instructions,
+      /Every reply names the resolved absolute root/,
+    );
+    assert.match(init.result.instructions, /retry the same call with root/i);
+  });
+});
+
+test("tool descriptions say when to pass root and how to shape a query", async () => {
+  await withServer({}, async ({ send, waitFor }) => {
+    send({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-03-26", capabilities: {} },
+    });
+    const init = await waitFor((message) => message.id === 1);
+    assert.match(
+      init.result.instructions,
+      /map of the code to read next, not a written answer/,
+    );
+
+    send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
+    const listed = await waitFor((message) => message.id === 2);
+    const tools = Object.fromEntries(
+      listed.result.tools.map((tool) => [tool.name, tool]),
+    );
+    for (const tool of Object.values(tools)) {
+      assert.match(
+        tool.inputSchema.properties.root.description,
+        /not the session cwd/,
+      );
+      assert.match(
+        tool.inputSchema.properties.detail.description,
+        /complete match text or the full graph dump/,
+      );
+    }
+    assert.match(
+      tools.grep.inputSchema.properties.pattern.description,
+      /One identifier or one regex/,
+    );
+    assert.match(
+      tools.graph.inputSchema.properties.query.description,
+      /a multi-paragraph question does not/,
+    );
+    assert.match(tools.graph.description, /not a written answer/);
   });
 });
 

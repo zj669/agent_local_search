@@ -37,6 +37,7 @@ test("routes each request to exactly one target repository", async () => {
   const local = await resolveRequestRoot({ cwd: repoA });
   assert.equal(local.root, repoA);
   assert.equal(local.constraint, null);
+  assert.equal(local.source, "cwd");
 
   const crossRepo = await resolveRequestRoot({
     cwd: repoA,
@@ -44,9 +45,15 @@ test("routes each request to exactly one target repository", async () => {
   });
   assert.equal(crossRepo.root, repoB);
   assert.equal(crossRepo.constraint, null);
+  assert.equal(crossRepo.source, "path");
+
+  const explicitRoot = await resolveRequestRoot({ cwd: repoA, root: repoB });
+  assert.equal(explicitRoot.root, repoB);
+  assert.equal(explicitRoot.source, "root");
 
   const localAgain = await resolveRequestRoot({ cwd: repoA });
   assert.equal(localAgain.root, repoA);
+  assert.equal(localAgain.source, "cwd");
 });
 
 test("a linked worktree resolves to its own checkout", async () => {

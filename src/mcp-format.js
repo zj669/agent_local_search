@@ -5,18 +5,30 @@ const SOURCE_PATH =
 export const MCP_INSTRUCTIONS = `codeq is local find, grep, and graph for one repository at a time. Indexes are created automatically on first use. Never ask the user to init, never write a .codegraph directory into the project, and never merge results across repositories.
 
 When to use which tool:
-- graph: how code works, a symbol, callers, callees, impact, or "where is X used". One call is enough — explore already includes related files, call paths, and blast radius. There is no callers tool.
+- graph: how code works, a symbol, callers, callees, impact, or "where is X used". Query with identifiers, or "how does X work" where X is identifiers — not a multi-paragraph question. One call is enough — explore already includes related files, call paths, and blast radius. There is no callers tool. graph returns a map of the code to read next, not a written answer.
 - find: file names and paths.
-- grep: file contents. Patterns may be literal or regex (auto-detected). All-match patterns like .* are rejected. Prefer a concrete identifier.
+- grep: file contents. One identifier or one regex per call (regex is auto-detected). All-match patterns like .* are rejected.
 
 Indexing starts on tools/call, never on initialize or tools/list. Prefer roots/list when the client gives a real project folder (not $HOME or /); otherwise use process.cwd() if that is a project. If the server was spawned from $HOME, pass path or root on the call. Pass path or root to search a different repository. Each call uses exactly one root.
 
-Default replies start with a freshness line, then a short summary and paths. Pass detail: "full" when you need complete match text or the full graph dump. If truncated is true, more remains — request detail "full" instead of guessing.`;
+Every reply names the resolved absolute root and where it came from: "root <abs> via root argument", "via path argument", or "via cwd (roots/list | spawn cwd | cwd argument | shell cwd)". Read that line. When the root is not the repository you asked about — the usual cause is omitting root while working across two repositories — retry the same call with root set to that repository instead of interpreting the result.
+
+Default replies start with that line, then a short summary and paths, which is enough to choose files to open. Pass detail: "full" only when you need complete match text or the full graph dump. If truncated is true, more remains — request detail "full" instead of guessing.`;
+
+export function rootOrigin(result = {}) {
+  if (result.rootSource === "root") return "root argument";
+  if (result.rootSource === "path") return "path argument";
+  if (result.rootSource !== "cwd") return null;
+  return result.cwdSource ? `cwd (${result.cwdSource})` : "cwd";
+}
 
 export function freshnessLine(result = {}) {
   const status = result.status || "unknown";
   const parts = [`[${status}]`];
-  if (result.root) parts.push(`root ${result.root}`);
+  if (result.root) {
+    const origin = rootOrigin(result);
+    parts.push(`root ${result.root}${origin ? ` via ${origin}` : ""}`);
+  }
   if (result.lastSuccessfulSync) {
     parts.push(`lastSuccessfulSync ${result.lastSuccessfulSync}`);
   }
@@ -57,6 +69,8 @@ function freshnessFields(command, result) {
     warning: result.warning ?? null,
     lastSuccessfulSync: result.lastSuccessfulSync ?? null,
     root: result.root ?? null,
+    rootSource: result.rootSource ?? null,
+    cwdSource: result.cwdSource ?? null,
     command,
   };
 }
