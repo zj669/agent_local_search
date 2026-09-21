@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 
 import { queryDaemon } from "../src/client.js";
-import { formatMcpToolResult, rootOrigin } from "../src/mcp-format.js";
+import {
+  formatMcpToolResult,
+  FULL_GREP_CONTEXT,
+  rootOrigin,
+} from "../src/mcp-format.js";
 import { runMcpServer } from "../src/mcp.js";
 
 const USAGE = `Usage:
@@ -115,6 +119,8 @@ function parseArguments(argv) {
   }
   if (options.context !== undefined) {
     options.context = positiveInteger(options.context, "--context", true);
+  } else if (command === "grep" && options.full) {
+    options.context = FULL_GREP_CONTEXT;
   }
   return options;
 }

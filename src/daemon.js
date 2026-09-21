@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 
 import { createServer } from "node:net";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
+import { acquireLock } from "./lock.js";
 import { daemonPaths, resolveRequestRoot, rootBucket } from "./paths.js";
 import { RootContext } from "./root-context.js";
+import { socketIsLive } from "./socket.js";
 
 const CWD_SOURCES = new Set([
   "roots/list",
@@ -16,8 +18,10 @@ const CWD_SOURCES = new Set([
 const ROOT_LIMIT = 4;
 const ROOT_TTL_MS = 5 * 60 * 1_000;
 const DAEMON_IDLE_MS = 30 * 60 * 1_000;
+const BIND_LOCK_TIMEOUT_MS = 30_000;
 const paths = daemonPaths();
 const roots = new Map();
+const opening = new Map();
 const graphDirs = {};
 let lastRequestAt = Date.now();
 let shuttingDown = false;
@@ -61,19 +65,28 @@ async function waitForSlot() {
   }
 }
 
+// waitForSlot yields, so two cold requests for the same root used to build two
+// RootContexts — two graph workers migrating one database. The promise is
+// registered before the first await, so the second request joins the first.
 async function contextFor(root) {
-  let context = roots.get(root);
-  if (context) {
-    context.touch();
-    return context;
+  const existing = roots.get(root);
+  if (existing) {
+    existing.touch();
+    return existing;
   }
-  await waitForSlot();
-  injectGraphDir(root);
-  context = new RootContext(root, paths.base);
-  roots.set(root, context);
-  context.startGraphIndex().catch(() => {});
-  await persistRegistry();
-  return context;
+  const pending = opening.get(root);
+  if (pending) return pending;
+  const creating = (async () => {
+    await waitForSlot();
+    injectGraphDir(root);
+    const context = new RootContext(root, paths.base);
+    roots.set(root, context);
+    context.startGraphIndex().catch(() => {});
+    await persistRegistry();
+    return context;
+  })().finally(() => opening.delete(root));
+  opening.set(root, creating);
+  return creating;
 }
 
 function send(socket, message) {
@@ -166,20 +179,47 @@ async function shutdown() {
   process.exit(0);
 }
 
-if (process.platform !== "win32" && existsSync(paths.socket)) {
-  await rm(paths.socket, { force: true });
-}
-await writeFile(paths.pid, `${process.pid}\n`);
-
-server.listen(paths.socket, async () => {
-  if (process.platform !== "win32") {
-    try {
-      const mode = (await readFile(paths.pid, "utf8")).trim();
-      if (mode !== String(process.pid)) throw new Error("daemon pid changed");
-    } catch {}
-  }
-  await persistRegistry();
+// Binding is the other cross-process critical section: without this lock a
+// second daemon unlinks a live socket and both end up half-owning it.
+const bind = await acquireLock(paths.bindLock, {
+  timeoutMs: BIND_LOCK_TIMEOUT_MS,
+  label: "daemon bind",
+  shortCircuit: () => socketIsLive(paths.socket),
 });
+if (!bind.release) process.exit(0);
+let outcome = "listening";
+try {
+  if (await socketIsLive(paths.socket)) {
+    outcome = "duplicate";
+  } else {
+    if (process.platform !== "win32" && existsSync(paths.socket)) {
+      await rm(paths.socket, { force: true });
+    }
+    await new Promise((resolve, reject) => {
+      const onError = (error) => reject(error);
+      server.once("error", onError);
+      server.listen(paths.socket, () => {
+        server.removeListener("error", onError);
+        resolve();
+      });
+    });
+    await writeFile(paths.pid, `${process.pid}\n`);
+  }
+} catch (error) {
+  outcome =
+    error.code === "EADDRINUSE" && (await socketIsLive(paths.socket))
+      ? "duplicate"
+      : error;
+} finally {
+  bind.release();
+}
+
+if (outcome === "duplicate") process.exit(0);
+if (outcome !== "listening") {
+  process.stderr.write(`codeq daemon: ${outcome.message || outcome}\n`);
+  process.exit(1);
+}
+await persistRegistry();
 
 const maintenance = setInterval(() => {
   const now = Date.now();

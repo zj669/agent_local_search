@@ -1,17 +1,12 @@
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
-import { connect } from "node:net";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { acquireLock } from "./lock.js";
 import { daemonPaths } from "./paths.js";
+import { openSocket, socketIsLive } from "./socket.js";
 
-function openSocket(socketPath) {
-  return new Promise((resolve, reject) => {
-    const socket = connect(socketPath);
-    socket.once("connect", () => resolve(socket));
-    socket.once("error", reject);
-  });
-}
+const START_LOCK_TIMEOUT_MS = 30_000;
 
 // Concurrent cold tool calls used to spawn one daemon each; they then raced to
 // bind the socket and to migrate the same CodeGraph database ("database is
@@ -25,12 +20,31 @@ export async function connectDaemon() {
   } catch {}
 
   if (!launching) {
-    launching = launchDaemon(paths).finally(() => {
+    launching = ensureDaemon(paths).finally(() => {
       launching = null;
     });
   }
   await launching;
   return openSocket(paths.socket);
+}
+
+// One launch per process is not enough: several MCP servers and CLI invocations
+// share one user-level daemon, so the autostart also has to be single across
+// processes. Only the startup window is locked.
+async function ensureDaemon(paths) {
+  const live = () => socketIsLive(paths.socket);
+  const held = await acquireLock(paths.startLock, {
+    timeoutMs: START_LOCK_TIMEOUT_MS,
+    label: "daemon autostart",
+    shortCircuit: live,
+  });
+  if (!held.release) return;
+  try {
+    if (await live()) return;
+    await launchDaemon(paths);
+  } finally {
+    held.release();
+  }
 }
 
 async function launchDaemon(paths) {

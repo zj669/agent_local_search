@@ -62,10 +62,17 @@ search another repository and `path` to narrow inside one (CLI `--root` /
 `--path`).
 
 `root` is a repository, checkout, or worktree, and `path` is the scope inside
-it — a directory or a single file. They are not interchangeable: a
-subdirectory passed as `root` becomes its own index rather than a narrower
-search, and a file passed as `root` falls back to the repository holding it
-with that file as the scope. Both cases are reported in the reply.
+it — a directory or a single file. **Only `root` selects an index**: one
+repository has one FFF index and one CodeGraph database, and every `path` in it
+reuses them. A subdirectory or a file passed as `root` resolves to the
+repository that holds it, narrowed to that subdirectory or file, and the reply's
+first line says so.
+
+A relative `path` is joined to the selected `root`, not to the session cwd, so
+`root /other/repo` with `path src/agent` searches `/other/repo/src/agent` even
+when the window sits in a different checkout. A `path` that does not exist is an
+error naming the absolute path that was tried — never a silent search of the
+whole repository.
 
 stdio accepts both newline-delimited JSON-RPC (one object per line, as
 OpenCode sends) and LSP `Content-Length` frames (as Cursor sends). Each reply
@@ -93,6 +100,13 @@ and the default is the cheap one:
   verbatim and then adds what the map withheld: source for `graph` with the
   query's target file first, context lines and full metadata for `grep` and
   `find`.
+
+`graph` ranks the files to open by the identifier that was asked for: its
+definition site first, then the files the blast radius ties to it. CodeGraph
+seeds its search by splitting `format_chat_details` into `format`, `chat` and
+`details`, so files that only matched a short token are named under
+`also ranked` instead of the top of the list, and `detail: "full"` still returns
+their source.
 
 A layer 1 `graph` reply that does not fit drops **whole file sections**, never
 half a file, and names what it dropped plus the `path=` that retrieves it.
@@ -175,7 +189,7 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/ma
 To pin the current GitHub release instead:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.7.tar.gz
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.8.tar.gz
 ```
 
 ## Commands
@@ -197,11 +211,17 @@ Git worktree gets its own indexes and is always read from its own checkout. For
 non-Git directories, `codeq` uses the current directory unless `--path` escapes
 it. The filesystem root and the user's home directory are refused.
 
-An explicit `--root` is taken literally, so `--root packages/foo` gives that
-package its own index — deliberate for a package, wasteful when the intent was
-to narrow a search, which is what `--path packages/foo` does. A `--root` that
-names a file is resolved to the repository holding it, with the file as the
-scope, and a `--root` that does not exist is an error rather than a new index.
+An index is created only when the root changes. `--root packages/foo` inside a
+worktree therefore searches the worktree narrowed to `packages/foo` — the same
+thing `--path packages/foo` does — instead of building a second index; a nested
+checkout with its own `.git` is still its own root. A `--root` that names a file
+is resolved to the repository holding it, with the file as the scope, and a
+`--root` that does not exist is an error rather than a new index.
+
+Any number of processes — several editor windows, their MCP servers, and the
+CLI — share one daemon per user. Autostart is guarded by a lock file, so the
+socket is bound and each CodeGraph database is migrated exactly once; after
+that, queries from different clients run side by side rather than in a queue.
 
 ## Data
 

@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdtempSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -297,16 +298,20 @@ test(
       root: subdirectory,
     });
     assert.equal(subdirectoryRoot.isError, false, subdirectoryRoot.text);
-    assert.equal(subdirectoryRoot.payload.root, subdirectory);
+    assert.equal(subdirectoryRoot.payload.root, repo);
     assert.match(
       subdirectoryRoot.payload.rootNote,
-      new RegExp(`subdirectory of ${repo} and carries its own index`),
+      /root named a subdirectory, so it resolved to this repository narrowed to packages\/widget\//,
     );
     assert.match(
       subdirectoryRoot.payload.rootNote,
-      new RegExp(`pass root ${repo} with path packages/widget`),
+      /pass a subdirectory as path, not root/,
     );
-    assert.deepEqual(subdirectoryRoot.payload.paths, ["index.ts"]);
+    assert.match(
+      subdirectoryRoot.text.split("\n")[0],
+      new RegExp(`root ${repo} via root argument \\(root named a subdirectory`),
+    );
+    assert.deepEqual(subdirectoryRoot.payload.paths, ["packages/widget/index.ts"]);
 
     const narrowed = await session.call("find", {
       query: "index.ts",
@@ -327,6 +332,22 @@ test(
     assert.equal(missing.isError, true);
     assert.match(missing.text, /root does not exist/);
     assert.match(missing.text, /narrow inside it with path/);
+
+    const missingPath = await session.call("find", {
+      query: "index.ts",
+      root: repo,
+      path: "packages/typo",
+    });
+    assert.equal(missingPath.isError, true);
+    assert.match(missingPath.text, /path not found: packages\/typo/);
+    assert.ok(
+      missingPath.text.includes(join(repo, "packages/typo")),
+      missingPath.text,
+    );
+
+    // A file root, a subdirectory root, a path and the checkout itself all named
+    // the same repository, so they must share the one index bucket it owns.
+    assert.deepEqual(readdirSync(join(dataDir, "roots")).length, 1);
 
     noDotCodegraph(repo);
   },

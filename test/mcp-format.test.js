@@ -263,6 +263,117 @@ test("graph folds the file list rather than cutting characters", () => {
   assert.ok(formatted.structuredContent.paths.length <= 12);
 });
 
+// The engine seeds its search on format, chat and details separately, so its
+// render order leads with whatever matched a short token.
+function shortTokenDump(renderTarget = true) {
+  const section = (path, symbols) =>
+    [
+      `**\`${path}\`** — ${symbols}`,
+      "",
+      "```python",
+      "1\tdef noop():",
+      "2\t    return None",
+      "```",
+      "",
+    ].join("\n");
+  return [
+    "Found 61 symbols across 4 files.",
+    "",
+    "**Blast radius — what depends on these (update/verify before editing)**",
+    "",
+    "- `format_chat_details` (src/leagent/generator.py:317) — 5 callers in `src/leagent/agent/global_agent.py`; tests: `tests/test_generator.py`",
+    "",
+    "**Source Code**",
+    "",
+    section("src/leagent/openai.py", "format_prompt(function), chat_completion(function)"),
+    section("src/leagent/retrieval/bm25.py", "get_scores(function), format_row(function)"),
+    section("src/leagent/chat/field_constraints.py", "get_constraints(function)"),
+    ...(renderTarget
+      ? [section("src/leagent/generator.py", "format_chat_details(function), render_reply(function)")]
+      : []),
+    section("src/leagent/agent/global_agent.py", "GlobalAgent(class), run(method)"),
+  ].join("\n");
+}
+
+test("graph opens the query identifier's file first, not the engine's order", () => {
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    query: "how does format_chat_details work",
+    result: shortTokenDump(),
+  });
+  const text = formatted.text;
+  const payload = formatted.structuredContent;
+
+  assert.match(text, /hit: format_chat_details — src\/leagent\/generator\.py:317/);
+  assert.match(
+    text,
+    /open these files \(2\)\n1\. src\/leagent\/generator\.py:317 — format_chat_details\(function\)/,
+  );
+  // A caller the blast radius ties to the identifier earns second place; files
+  // that only matched format, chat or get do not.
+  assert.equal(payload.paths[1], "src/leagent/agent/global_agent.py");
+  assert.deepEqual(payload.paths.slice(0, 3), [
+    "src/leagent/generator.py",
+    "src/leagent/agent/global_agent.py",
+  ]);
+  assert.match(
+    text,
+    /also ranked, on shorter tokens than format_chat_details: src\/leagent\/openai\.py, src\/leagent\/retrieval\/bm25\.py, src\/leagent\/chat\/field_constraints\.py — detail:"full" expands them\./,
+  );
+  for (const noise of [
+    "src/leagent/openai.py",
+    "src/leagent/retrieval/bm25.py",
+    "src/leagent/chat/field_constraints.py",
+  ]) {
+    assert.equal(payload.paths.includes(noise), false);
+    assert.equal(payload.alsoRanked.includes(noise), true);
+  }
+});
+
+test("graph opens a definition site the engine named but never rendered", () => {
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    query: "how does format_chat_details work",
+    result: shortTokenDump(false),
+  });
+  assert.match(
+    formatted.text,
+    /open these files \(2\)\n1\. src\/leagent\/generator\.py:317 — format_chat_details/,
+  );
+  assert.equal(formatted.structuredContent.files[0].renderedLines, null);
+  assert.equal(formatted.structuredContent.paths[0], "src/leagent/generator.py");
+});
+
+test("graph layer 1 puts the query's file before the short-token neighbours", () => {
+  const full = formatMcpToolResult(
+    "graph",
+    {
+      ...graphResult,
+      query: "how does format_chat_details work",
+      result: shortTokenDump(),
+    },
+    { detail: "full" },
+  );
+  const source = full.text.slice(full.text.indexOf("**Source Code**"));
+  const order = ["src/leagent/generator.py", "src/leagent/openai.py"].map((path) =>
+    source.indexOf(`**\`${path}\`**`),
+  );
+  assert.ok(order[0] > 0 && order[0] < order[1], full.text);
+});
+
+test("graph says when one query stacked several topics", () => {
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    query: "regression benchmark replay",
+  });
+  assert.match(
+    formatted.text,
+    /this query names 3 topics \(regression, benchmark, replay\), so the map covers all of them — call one identifier per query for a narrow map\./,
+  );
+  const single = formatMcpToolResult("graph", graphResult);
+  assert.equal(single.text.includes("topics"), false);
+});
+
 test("grep is exact by default and never labels itself fuzzy", () => {
   const formatted = formatMcpToolResult("grep", {
     status: "ready",
