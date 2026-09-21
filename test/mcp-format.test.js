@@ -30,12 +30,13 @@ test("freshness line leads every MCP payload", () => {
   const payload = parseMcpToolText(formatted.text);
   assert.equal(payload.status, "degraded");
   assert.equal(payload.lastSuccessfulSync, stale.lastSuccessfulSync);
-  assert.deepEqual(Object.keys(payload).slice(0, 6), [
+  assert.deepEqual(Object.keys(payload).slice(0, 7), [
     "status",
     "warning",
     "lastSuccessfulSync",
     "root",
     "rootSource",
+    "rootNote",
     "cwdSource",
   ]);
   assert.deepEqual(payload.paths, ["src/app.ts"]);

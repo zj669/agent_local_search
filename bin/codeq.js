@@ -111,7 +111,8 @@ function printStatus(result) {
     : "";
   const origin = rootOrigin(result);
   const via = origin ? ` via ${origin}` : "";
-  process.stderr.write(`[${result.status}] root ${result.root}${via}${sync}\n`);
+  const note = result.rootNote ? ` (${result.rootNote})` : "";
+  process.stderr.write(`[${result.status}] root ${result.root}${via}${note}${sync}\n`);
   if (result.warning) process.stderr.write(`warning: ${result.warning}\n`);
 }
 

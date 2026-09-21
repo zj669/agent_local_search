@@ -95,6 +95,17 @@ async function gitRoot(input) {
   }
 }
 
+function relativePath(from, to) {
+  return relative(from, to).split(sep).join("/");
+}
+
+async function enclosingWorktree(root) {
+  if (existsSync(join(root, ".git"))) return null;
+  const worktree = await gitRoot(root);
+  if (!worktree || worktree === root) return null;
+  return worktree;
+}
+
 export function unsafeRootReason(root) {
   const value = canonical(root);
   if (value === canonical(parse(value).root)) return "the filesystem root";
@@ -115,14 +126,29 @@ export async function resolveRequestRoot(request) {
   const targetExisting = canonical(existingDirectory(targetAbsolute));
   let root;
   let source;
+  let note = null;
+  let fileConstraint = null;
 
   if (request.root) {
     const explicit = expandPath(request.root, cwd);
-    if (!existsSync(explicit) || !statSync(explicit).isDirectory()) {
-      throw new Error(`--root must name an existing directory: ${explicit}`);
+    if (!existsSync(explicit)) {
+      throw new Error(
+        `root does not exist: ${explicit}. Pass root as the absolute path of a repository or worktree checkout, and narrow inside it with path.`,
+      );
     }
-    root = canonical(explicit);
     source = "root";
+    if (statSync(explicit).isDirectory()) {
+      root = canonical(explicit);
+    } else if (request.path) {
+      throw new Error(
+        `root names a file and path was also passed: ${explicit}. Pass root as the repository checkout and put the file in path.`,
+      );
+    } else {
+      const file = canonical(explicit);
+      root = (await gitRoot(dirname(file))) || dirname(file);
+      fileConstraint = relativePath(root, file);
+      note = `root named a file, so it resolved to this repository narrowed to ${fileConstraint}; pass a file as path, not root`;
+    }
   } else {
     source = request.path ? "path" : "cwd";
     root = await gitRoot(targetExisting);
@@ -143,11 +169,22 @@ export async function resolveRequestRoot(request) {
     throw new Error(`refusing to index ${root}: it is ${unsafe}`);
   }
 
-  let constraint = null;
+  if (source === "root" && !note) {
+    const worktree = await enclosingWorktree(root);
+    if (worktree) {
+      note =
+        `root is a subdirectory of ${worktree} and carries its own index; ` +
+        `to search the whole repository pass root ${worktree} with path ${relativePath(worktree, root)}`;
+    }
+  }
+
+  let constraint = fileConstraint;
   if (request.path) {
     const rel = relative(root, targetAbsolute);
     if (rel && (rel.startsWith("..") || isAbsolute(rel))) {
-      throw new Error(`--path resolves outside selected root ${root}: ${targetAbsolute}`);
+      throw new Error(
+        `path resolves outside the selected root ${root}: ${targetAbsolute}. Pass root as the repository that holds it, or a path inside this root.`,
+      );
     }
     if (rel && rel !== ".") {
       constraint = rel.split(sep).join("/");
@@ -157,5 +194,5 @@ export async function resolveRequestRoot(request) {
     }
   }
 
-  return { root, constraint, target: targetAbsolute, source };
+  return { root, constraint, target: targetAbsolute, source, note };
 }

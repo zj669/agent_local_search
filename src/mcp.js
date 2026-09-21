@@ -18,13 +18,13 @@ const ROOTS_LIST_TIMEOUT_MS = 5_000;
 const PATH_PROPERTY = {
   type: "string",
   description:
-    "Optional path constraint relative to the session cwd, for narrowing inside one repository, for example src/ or mr_review_service. Workspace-relative paths stay on the current root; absolute, ~/, and ../ paths that leave the workspace switch to that repository. To switch repositories, prefer root. Each call uses exactly one root.",
+    "Narrow the search inside the selected repository: a directory (src/, mr_review_service, mr_review_service/profiles) or a single file (src/leagent/chat/policy_selector.py). This is the only way to scope a search; it reuses the repository index instead of building a second one. Paths are relative to the session cwd; absolute, ~/, and ../ paths that leave the workspace switch to that repository, but prefer root for that. Each call uses exactly one root.",
 };
 
 const ROOT_PROPERTY = {
   type: "string",
   description:
-    "Absolute index root for this call only, overriding Git/cwd detection. Pass it whenever the repository you are asking about is not the session cwd: a second clone, another checkout or worktree, or any repository when the server was spawned from $HOME. Omitting it silently searches the session cwd, which is the wrong tree when your question is about another repository. Every reply names the resolved root and where it came from; if that root is not the repository you meant, retry with root.",
+    "Absolute path of the repository, checkout, or worktree to search, for this call only, overriding Git/cwd detection. Pass it whenever the repository you are asking about is not the session cwd: a second clone, another checkout or worktree, or any repository when the server was spawned from $HOME. Omitting it silently searches the session cwd, which is the wrong tree when your question is about another repository. root is not a scope: a subdirectory passed as root becomes its own separate index instead of a narrower search, and a file passed as root falls back to the repository holding it. To scope a search, keep root at the checkout and pass path. Every reply names the resolved root and where it came from; if that root is not the repository you meant, retry with root.",
 };
 
 export const NO_WORKSPACE_ERROR =
@@ -54,13 +54,14 @@ const TOOLS = [
     name: "find",
     title: "Find files",
     description:
-      "Find files by name or path using the local codeq index (FFF). Indexes the selected root automatically on first use; never ask the user to init or create a project-local index. Pass path or root to search a different repository. Each call uses exactly one root; results from multiple repositories are never merged.",
+      "Find files by name or path using the local codeq index (FFF). Indexes the selected root automatically on first use; never ask the user to init or create a project-local index. Pass root to search a different repository and path to narrow inside one. Each call uses exactly one root; results from multiple repositories are never merged.",
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
-          description: "File name or path fragment to search for",
+          description:
+            "File name or path fragment, matched fuzzily against every indexed path, for example leagent.py, profiles/leagent, profile, or SKILL.md. Dotfiles and dot-directories such as .claude/skills and .cursor/rules are indexed, so look for skills and rules here instead of a native glob tool. Glob syntax is not supported: **/*profile* matches nothing, pass profile instead.",
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
@@ -80,7 +81,7 @@ const TOOLS = [
     name: "grep",
     title: "Search file contents",
     description:
-      "Search file contents using the local codeq index (FFF). Auto-detects regex, retries as fuzzy on zero literal hits, and rejects all-match patterns like .*. Indexes the selected root automatically on first use; never ask the user to init. Pass path or root to search a different repository. Each call uses exactly one root; results from multiple repositories are never merged.",
+      "Search file contents using the local codeq index (FFF). Auto-detects regex, retries as fuzzy on zero literal hits, and rejects all-match patterns like .*. Indexes the selected root automatically on first use; never ask the user to init. Pass root to search a different repository and path to narrow inside one. Each call uses exactly one root; results from multiple repositories are never merged.",
     inputSchema: {
       type: "object",
       properties: {
@@ -116,7 +117,7 @@ const TOOLS = [
     name: "graph",
     title: "Explore the code graph",
     description:
-      "Explore related symbols and files with CodeGraph explore. Returns a map of the code — related symbols, files, call paths, and blast radius — to read next, not a written answer, so expect to open the files it names. Do not look for a callers tool. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass path or root to query a different repository. Each call uses exactly one root. Default detail is a summary plus paths; pass detail full for the complete dump.",
+      "Explore related symbols and files with CodeGraph explore. Returns a map of the code — related symbols, files, call paths, and blast radius — to read next, not a written answer, so expect to open the files it names. Do not look for a callers tool. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass root to query a different repository and path to narrow inside one. Each call uses exactly one root. Default detail is a summary plus paths; pass detail full for the complete dump.",
     inputSchema: {
       type: "object",
       properties: {
