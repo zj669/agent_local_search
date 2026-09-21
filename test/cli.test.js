@@ -31,6 +31,8 @@ test("mcp help describes the stdio server", () => {
   const stdout = run(["mcp", "--help"]);
   assert.match(stdout, /stdio MCP server/);
   assert.match(stdout, /find, grep, and graph/);
+  assert.match(stdout, /roots\/list/);
+  assert.match(stdout, /spawn cwd/);
 });
 
 test("mcp rejects extra arguments", () => {

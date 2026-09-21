@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import test from "node:test";
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 import {
   createFramedParser,
   createMcpServer,
@@ -8,6 +12,8 @@ import {
   negotiateProtocolVersion,
 } from "../src/mcp.js";
 import { parseMcpToolText } from "../src/mcp-format.js";
+
+const { version } = createRequire(import.meta.url)("../package.json");
 
 function collectMessages(stream) {
   const messages = [];
@@ -91,7 +97,7 @@ test("initialize advertises only find, grep, and graph", async () => {
     const init = await waitFor((message) => message.id === 1);
     assert.equal(init.result.protocolVersion, "2025-03-26");
     assert.equal(init.result.serverInfo.name, "codeq");
-    assert.equal(init.result.serverInfo.version, "0.2.1");
+    assert.equal(init.result.serverInfo.version, version);
     assert.match(init.result.instructions, /never ask the user to init/i);
     assert.match(init.result.instructions, /graph: how code works/i);
     assert.match(init.result.instructions, /There is no callers tool/i);
@@ -287,6 +293,16 @@ test("path/root and cwd switch a single root with no fusion", async () => {
         query: "main.go",
         path: "../beta",
       });
+      send({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "find", arguments: { query: "widget" } },
+      });
+      await waitFor((message) => message.id === 3);
+      assert.equal(seen[1].cwd, "/tmp/workspace");
+      assert.equal(seen[1].path, undefined);
+      assert.equal(seen[1].root, undefined);
     },
   );
 });
@@ -451,4 +467,19 @@ test("MCP replies start with freshness and keep a graph budget", async () => {
       assert.match(payload.hint, /detail: "full"/);
     },
   );
+});
+
+test("README default MCP snippet uses global codeq and spawn cwd, not CODEQ_CWD", () => {
+  const readme = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "README.md"),
+    "utf8",
+  );
+  assert.equal(readme.includes("CODEQ_CWD"), true);
+  assert.match(readme, /Do not set `CODEQ_CWD`/);
+  const firstSnippet = readme.split("```json")[1].split("```")[0];
+  assert.match(firstSnippet, /"command": "codeq"/);
+  assert.match(firstSnippet, /"cwd": "\$\{workspaceFolder\}"/);
+  assert.equal(firstSnippet.includes("npx"), false);
+  assert.equal(firstSnippet.includes("CODEQ_CWD"), false);
+  assert.match(readme, /spawn working directory/);
 });
