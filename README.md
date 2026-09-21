@@ -13,36 +13,34 @@ Node.js `>=22.5 <25` is required.
 
 ## Install, update, and uninstall
 
-Install from GitHub (works today):
+Install:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/main.tar.gz
+npm install -g @zj669/codeq
 ```
 
-Run the same command to update to the latest version from GitHub:
+Update:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/main.tar.gz
-```
-
-To pin the current release instead:
-
-```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.1.0.tar.gz
+npm update -g @zj669/codeq
 ```
 
 Uninstall:
 
 ```bash
-npm uninstall -g @codeq/cli
+npm uninstall -g @zj669/codeq
 ```
 
-Once the npm package is published, use the registry instead:
+As a fallback, install the latest source archive from GitHub:
 
 ```bash
-npm install -g @codeq/cli
-npm update -g @codeq/cli
-npm uninstall -g @codeq/cli
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/main.tar.gz
+```
+
+To pin the current GitHub release instead:
+
+```bash
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.1.0.tar.gz
 ```
 
 ## Commands
