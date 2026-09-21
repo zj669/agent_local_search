@@ -55,8 +55,15 @@ and no usable `roots/list`, the tool returns a "pass path or root" error
 instead of indexing home.
 
 The MCP tools are `find`, `grep`, and `graph`. They reuse the same user-level
-daemon as the CLI. A call always searches exactly one root. Pass `path` /
-`root` to search another repository (CLI `--path` / `--root`).
+daemon as the CLI. A call always searches exactly one root. Pass `root` to
+search another repository and `path` to narrow inside one (CLI `--root` /
+`--path`).
+
+`root` is a repository, checkout, or worktree, and `path` is the scope inside
+it — a directory or a single file. They are not interchangeable: a
+subdirectory passed as `root` becomes its own index rather than a narrower
+search, and a file passed as `root` falls back to the repository holding it
+with that file as the scope. Both cases are reported in the reply.
 
 stdio accepts both newline-delimited JSON-RPC (one object per line, as
 OpenCode sends) and LSP `Content-Length` frames (as Cursor sends). Each reply
@@ -76,13 +83,16 @@ the routing:
 ```text
 [ready] root /abs/path/to/B via root argument
 [ready] root /abs/path/to/A via cwd (roots/list)
+[ready] root /abs/repo via root argument (root named a file, so it resolved to
+this repository narrowed to src/policy.py; pass a file as path, not root)
 ```
 
 The origin is `root argument`, `path argument`, or `cwd (...)` with the cwd's
 own source: `roots/list`, `spawn cwd`, `cwd argument`, or the CLI's
 `shell cwd`. MCP payloads and `--json` carry the same values as `rootSource`
-and `cwdSource`. When that root is not the repository you meant — usually from
-omitting `root` while working across two repositories — retry with `root`.
+and `cwdSource`, plus `rootNote` for the parenthesised note. When that root is
+not the repository you meant — usually from omitting `root` while working
+across two repositories — retry with `root`.
 
 ## Install, update, and uninstall
 
@@ -113,7 +123,7 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/ma
 To pin the current GitHub release instead:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.5.tar.gz
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.6.tar.gz
 ```
 
 ## Commands
@@ -134,6 +144,12 @@ The root is the deepest Git worktree containing the target. This means a linked
 Git worktree gets its own indexes and is always read from its own checkout. For
 non-Git directories, `codeq` uses the current directory unless `--path` escapes
 it. The filesystem root and the user's home directory are refused.
+
+An explicit `--root` is taken literally, so `--root packages/foo` gives that
+package its own index — deliberate for a package, wasteful when the intent was
+to narrow a search, which is what `--path packages/foo` does. A `--root` that
+names a file is resolved to the repository holding it, with the file as the
+scope, and a `--root` that does not exist is an error rather than a new index.
 
 ## Data
 

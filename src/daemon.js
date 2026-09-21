@@ -117,6 +117,7 @@ async function execute(request, socket) {
   return {
     ...result,
     rootSource: routed.source,
+    rootNote: routed.note,
     cwdSource: CWD_SOURCES.has(request.cwdSource) ? request.cwdSource : null,
   };
 }

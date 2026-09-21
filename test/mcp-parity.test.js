@@ -238,6 +238,102 @@ const widget = (name, token, extra) =>
   ].join("\n");
 
 test(
+  "a file or subdirectory passed as root is resolved, scoped, and named in the reply",
+  { timeout: 120_000 },
+  async (t) => {
+    const parent = mkdtempSync(join(tmpdir(), "codeq-root-shapes-"));
+    const dataDir = join(parent, "data");
+    const env = isolatedEnv(dataDir);
+    const repo = initRepo(join(parent, "repo"), {
+      "src/leagent/policy_selector.py": "SHARED_POLICY_TOKEN = 1\n",
+      "src/leagent/reply_router.py": "SHARED_POLICY_TOKEN = 2\n",
+      "packages/widget/index.ts": 'export const WIDGET_ONLY_TOKEN = "widget";\n',
+    });
+    const file = join(repo, "src/leagent/policy_selector.py");
+    const subdirectory = join(repo, "packages/widget");
+
+    let session;
+    t.after(() => {
+      session?.close();
+      stopDaemon(dataDir);
+    });
+    session = spawnMcp({ cwd: repo, env });
+    await session.initialize();
+
+    const fileRoot = await session.call("grep", {
+      pattern: "SHARED_POLICY_TOKEN",
+      root: file,
+    });
+    assert.equal(fileRoot.isError, false, fileRoot.text);
+    assert.equal(fileRoot.payload.root, repo);
+    assert.equal(fileRoot.payload.rootSource, "root");
+    assert.match(fileRoot.payload.rootNote, /root named a file/);
+    assert.match(fileRoot.payload.rootNote, /pass a file as path, not root/);
+    assert.match(
+      fileRoot.text.split("\n")[0],
+      new RegExp(`root ${repo} via root argument \\(root named a file`),
+    );
+    assert.deepEqual(fileRoot.payload.paths, ["src/leagent/policy_selector.py"]);
+
+    const cliFileRoot = cliJson(["--root", file, "grep", "SHARED_POLICY_TOKEN"], {
+      cwd: repo,
+      env,
+    });
+    assert.equal(cliFileRoot.root, repo);
+    assert.match(cliFileRoot.rootNote, /root named a file/);
+    assert.deepEqual(
+      [...new Set(cliFileRoot.results.map((item) => item.path))],
+      ["src/leagent/policy_selector.py"],
+    );
+    assert.match(
+      cliStatusLine(["--root", file, "grep", "SHARED_POLICY_TOKEN"], {
+        cwd: repo,
+        env,
+      }),
+      new RegExp(`^\\[\\w+\\] root ${repo} via root argument \\(root named a file`),
+    );
+
+    const subdirectoryRoot = await session.call("find", {
+      query: "index.ts",
+      root: subdirectory,
+    });
+    assert.equal(subdirectoryRoot.isError, false, subdirectoryRoot.text);
+    assert.equal(subdirectoryRoot.payload.root, subdirectory);
+    assert.match(
+      subdirectoryRoot.payload.rootNote,
+      new RegExp(`subdirectory of ${repo} and carries its own index`),
+    );
+    assert.match(
+      subdirectoryRoot.payload.rootNote,
+      new RegExp(`pass root ${repo} with path packages/widget`),
+    );
+    assert.deepEqual(subdirectoryRoot.payload.paths, ["index.ts"]);
+
+    const narrowed = await session.call("find", {
+      query: "index.ts",
+      path: "packages/widget",
+    });
+    assert.equal(narrowed.payload.root, repo);
+    assert.equal(narrowed.payload.rootNote, null);
+    assert.deepEqual(narrowed.payload.paths, ["packages/widget/index.ts"]);
+
+    const checkout = await session.call("find", { query: "index.ts", root: repo });
+    assert.equal(checkout.payload.root, repo);
+    assert.equal(checkout.payload.rootNote, null);
+
+    const missing = await session.call("find", {
+      query: "index.ts",
+      root: join(repo, "packages/typo"),
+    });
+    assert.equal(missing.isError, true);
+    assert.match(missing.text, /root does not exist/);
+    assert.match(missing.text, /narrow inside it with path/);
+
+    noDotCodegraph(repo);
+  },
+);
+
+test(
   "MCP stdio matches CLI: tools/list, worktree, cross-repo, multi-root, HOME spawn",
   { timeout: 240_000 },
   async (t) => {

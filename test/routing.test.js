@@ -56,6 +56,66 @@ test("routes each request to exactly one target repository", async () => {
   assert.equal(localAgain.source, "cwd");
 });
 
+test("a file passed as root searches its repository and narrows to that file", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "codeq-file-root-"));
+  const repo = repository(parent, "repo");
+  const file = join(repo, "src", "marker.js");
+
+  const routed = await resolveRequestRoot({ cwd: repo, root: file });
+  assert.equal(routed.root, repo);
+  assert.equal(routed.constraint, "src/marker.js");
+  assert.equal(routed.source, "root");
+  assert.match(routed.note, /root named a file/);
+  assert.match(routed.note, /pass a file as path, not root/);
+
+  const asPath = await resolveRequestRoot({ cwd: repo, path: "src/marker.js" });
+  assert.equal(asPath.root, routed.root);
+  assert.equal(asPath.constraint, routed.constraint);
+  assert.equal(asPath.note, null);
+
+  await assert.rejects(
+    resolveRequestRoot({ cwd: repo, root: file, path: "src" }),
+    /root names a file and path was also passed/,
+  );
+});
+
+test("root must exist, and says what to pass when it does not", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "codeq-missing-root-"));
+  const repo = repository(parent, "repo");
+
+  await assert.rejects(
+    resolveRequestRoot({ cwd: repo, root: join(repo, "src", "typo") }),
+    (error) => {
+      assert.match(error.message, /root does not exist/);
+      assert.match(error.message, /repository or worktree checkout/);
+      assert.match(error.message, /narrow inside it with path/);
+      return true;
+    },
+  );
+});
+
+test("a subdirectory passed as root keeps its own index and says so", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "codeq-subdir-root-"));
+  const repo = repository(parent, "repo");
+  const subdirectory = join(repo, "src");
+
+  const routed = await resolveRequestRoot({ cwd: repo, root: subdirectory });
+  assert.equal(routed.root, subdirectory);
+  assert.equal(routed.constraint, null);
+  assert.equal(routed.source, "root");
+  assert.match(routed.note, new RegExp(`subdirectory of ${repo}`));
+  assert.match(routed.note, new RegExp(`pass root ${repo} with path src`));
+
+  const checkout = await resolveRequestRoot({ cwd: repo, root: repo });
+  assert.equal(checkout.root, repo);
+  assert.equal(checkout.note, null);
+
+  const narrowed = await resolveRequestRoot({ cwd: repo, path: "src" });
+  assert.equal(narrowed.root, repo);
+  assert.equal(narrowed.constraint, "src/");
+  assert.equal(narrowed.note, null);
+});
+
 test("a linked worktree resolves to its own checkout", async () => {
   const parent = mkdtempSync(join(tmpdir(), "codeq-worktree-"));
   const main = repository(parent, "main");

@@ -6,12 +6,14 @@ export const MCP_INSTRUCTIONS = `codeq is local find, grep, and graph for one re
 
 When to use which tool:
 - graph: how code works, a symbol, callers, callees, impact, or "where is X used". Query with identifiers, or "how does X work" where X is identifiers — not a multi-paragraph question. One call is enough — explore already includes related files, call paths, and blast radius. There is no callers tool. graph returns a map of the code to read next, not a written answer.
-- find: file names and paths.
+- find: file names and paths, matched fuzzily, including dotfiles and dot-directories such as .claude/skills and .cursor/rules. Not a glob: **/*profile* matches nothing, pass profile.
 - grep: file contents. One identifier or one regex per call (regex is auto-detected). All-match patterns like .* are rejected.
 
-Indexing starts on tools/call, never on initialize or tools/list. Prefer roots/list when the client gives a real project folder (not $HOME or /); otherwise use process.cwd() if that is a project. If the server was spawned from $HOME, pass path or root on the call. Pass path or root to search a different repository. Each call uses exactly one root.
+Indexing starts on tools/call, never on initialize or tools/list. Prefer roots/list when the client gives a real project folder (not $HOME or /); otherwise use process.cwd() if that is a project. If the server was spawned from $HOME, pass path or root on the call. Each call uses exactly one root.
 
-Every reply names the resolved absolute root and where it came from: "root <abs> via root argument", "via path argument", or "via cwd (roots/list | spawn cwd | cwd argument | shell cwd)". Read that line. When the root is not the repository you asked about — the usual cause is omitting root while working across two repositories — retry the same call with root set to that repository instead of interpreting the result.
+root and path are not interchangeable. root is the repository, checkout, or worktree to search: pass it whenever the question is about a repository other than the session cwd. path narrows inside that repository and takes a directory or a single file. A subdirectory passed as root builds a second index of that subdirectory instead of narrowing, and a file passed as root falls back to the repository holding it; both cases say so in the reply.
+
+Every reply names the resolved absolute root and where it came from: "root <abs> via root argument", "via path argument", or "via cwd (roots/list | spawn cwd | cwd argument | shell cwd)", followed by a parenthesised note when root was not a repository checkout. Read that line. When the root is not the repository you asked about — the usual cause is omitting root while working across two repositories — retry the same call with root set to that repository instead of interpreting the result.
 
 Default replies start with that line, then a short summary and paths, which is enough to choose files to open. Pass detail: "full" only when you need complete match text or the full graph dump. If truncated is true, more remains — request detail "full" instead of guessing.`;
 
@@ -28,6 +30,7 @@ export function freshnessLine(result = {}) {
   if (result.root) {
     const origin = rootOrigin(result);
     parts.push(`root ${result.root}${origin ? ` via ${origin}` : ""}`);
+    if (result.rootNote) parts.push(`(${result.rootNote})`);
   }
   if (result.lastSuccessfulSync) {
     parts.push(`lastSuccessfulSync ${result.lastSuccessfulSync}`);
@@ -70,6 +73,7 @@ function freshnessFields(command, result) {
     lastSuccessfulSync: result.lastSuccessfulSync ?? null,
     root: result.root ?? null,
     rootSource: result.rootSource ?? null,
+    rootNote: result.rootNote ?? null,
     cwdSource: result.cwdSource ?? null,
     command,
   };
