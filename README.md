@@ -6,7 +6,9 @@ local CLI, a stdio MCP server, and an automatically managed per-user daemon.
 ```bash
 codeq find router
 codeq grep "TODO" --glob "**/*.ts" --context 2
+codeq grep PG_DATABASE_URL --fuzzy
 codeq graph "how does authentication reach the session store?"
+codeq graph "how does saas_reply build CommandReplyResponse" --full
 codeq mcp
 ```
 
@@ -69,12 +71,62 @@ stdio accepts both newline-delimited JSON-RPC (one object per line, as
 OpenCode sends) and LSP `Content-Length` frames (as Cursor sends). Each reply
 uses the same framing as that request. There is no Python framing bridge.
 
-`grep` auto-detects regex, retries as fuzzy when a literal search has zero
-hits, and rejects all-match patterns such as `.*`. Both CLI and MCP accept
-`--limit` / `limit`. MCP replies start with index freshness (`ready` /
-`indexing` / `degraded` and `lastSuccessfulSync`) and default to a short
-summary plus paths; pass `detail: "full"` for complete match text or the full
-graph dump.
+`grep` auto-detects regex and rejects all-match patterns such as `.*`. It is
+**exact by default**: zero hits are reported as zero hits, never silently
+re-run as an approximate search. Pass `fuzzy: true` (CLI `--fuzzy`) to accept
+approximate names; those replies are labelled `[fuzzy]` on the first line, say
+which identifier they actually matched, and are **not** the name you asked for.
+Both CLI and MCP accept `--limit` / `limit`.
+
+## Two layers per reply
+
+Every reply starts with index freshness (`ready` / `indexing` / `degraded` and
+`lastSuccessfulSync`) and the resolved root. After that there are two layers,
+and the default is the cheap one:
+
+- **layer 0** (default, `detail: "summary"`) is a map: the hit symbols, the
+  files to open next with their relevant line ranges, and what depends on them.
+  It carries **no source code** — opening the named files with the host's own
+  `Read` is cheaper than codeq forwarding them, and it keeps a `graph` reply
+  around 1 KB instead of 5 KB.
+- **layer 1** (`detail: "full"`, CLI `--full`) repeats the whole layer 0 map
+  verbatim and then adds what the map withheld: source for `graph` with the
+  query's target file first, context lines and full metadata for `grep` and
+  `find`.
+
+A layer 1 `graph` reply that does not fit drops **whole file sections**, never
+half a file, and names what it dropped plus the `path=` that retrieves it.
+
+```text
+[ready] root /repo via root argument
+graph "how does formatMcpToolResult work" — 43 symbols in 3 files, exact hit on formatMcpToolResult
+
+hit: formatMcpToolResult — src/mcp-format.js:82
+
+open these files (3)
+1. src/mcp-format.js:82 — formatMcpToolResult(function), MCP_INSTRUCTIONS(constant) +7 · relevant lines 1-135
+2. src/mcp.js — send, positiveInteger, isUnusableWorkspace, jsonRpcError +25 · relevant lines 252-438
+3. bin/codeq.js — fail, positiveInteger, queryDaemon, rootOrigin +21 · relevant lines 1-190
+
+depends on this (blast radius, query symbols only)
+- formatMcpToolResult (src/mcp-format.js:82) — 3 callers in src/mcp.js; tests: test/mcp-format.test.js
++4 other symbols the engine ranked (TOOLS, toolRequest, MCP_INSTRUCTIONS, MCP_USAGE) — detail:"full"
+
+no source in this map. detail:"full" returns source for these 3 files (~16 KB), target file first.
+```
+
+The MCP text block is that map and nothing else. Machine fields (`shown`,
+`moreRemain`, `files[].renderedLines`, `score`, …) travel in
+`structuredContent`, described by each tool's `outputSchema`. This is a
+**deliberate deviation** from the MCP 2025-06-18 note that a tool returning
+structured content SHOULD also serialize it into a text block: doing that
+re-added about 10% pure escaping tax and buried the map in the middle of the
+reply. The text channel is self-contained, so a client that ignores
+`structuredContent` loses numbers, never a decision.
+
+CLI human output prints the same layer 0 map on stdout with the status line on
+stderr. `--json` is unaffected by layers: it stays the complete daemon result
+and is the stable anchor for scripts.
 
 Every reply also names the resolved absolute root and which input selected it,
 so a call that landed in the wrong repository is visible without re-deriving
@@ -89,7 +141,7 @@ this repository narrowed to src/policy.py; pass a file as path, not root)
 
 The origin is `root argument`, `path argument`, or `cwd (...)` with the cwd's
 own source: `roots/list`, `spawn cwd`, `cwd argument`, or the CLI's
-`shell cwd`. MCP payloads and `--json` carry the same values as `rootSource`
+`shell cwd`. MCP `structuredContent` and `--json` carry the same values as `rootSource`
 and `cwdSource`, plus `rootNote` for the parenthesised note. When that root is
 not the repository you meant — usually from omitting `root` while working
 across two repositories — retry with `root`.
@@ -123,15 +175,15 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/ma
 To pin the current GitHub release instead:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.6.tar.gz
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.7.tar.gz
 ```
 
 ## Commands
 
 ```text
-codeq [--root PATH] [--json] find  <query>   [--path PATH] [--limit N]
-codeq [--root PATH] [--json] grep  <pattern> [--path PATH] [--glob GLOB] [--context N] [--limit N]
-codeq [--root PATH] [--json] graph <query>   [--path PATH]
+codeq [--root PATH] [--json|--full] find  <query>   [--path PATH] [--limit N]
+codeq [--root PATH] [--json|--full] grep  <pattern> [--path PATH] [--glob GLOB] [--context N] [--limit N] [--fuzzy]
+codeq [--root PATH] [--json|--full] graph <query>   [--path PATH]
 codeq mcp
 ```
 

@@ -280,13 +280,16 @@ export class RootContext {
     );
     return {
       ...this.metadata(),
+      query,
       total: value.totalMatched,
+      indexed: value.totalFiles ?? null,
       results: value.items.map((item, index) => ({
         path: item.relativePath,
         size: item.size,
         modified: item.modified,
         gitStatus: item.gitStatus,
         score: value.scores[index]?.total ?? null,
+        matchType: value.scores[index]?.matchType ?? null,
       })),
     };
   }
@@ -309,8 +312,10 @@ export class RootContext {
       afterContext: options.context,
     };
     let value = unwrap(finder.grep(query, grepOptions), "FFF content search failed");
-    let fuzzyFallback = false;
-    if (value.items.length === 0 && mode !== "regex") {
+    let usedFuzzy = false;
+    // Approximate matching is opt-in: a zero-hit exact search stays zero unless
+    // the caller asked for it, because a fuzzy hit is a different identifier.
+    if (options.fuzzy && value.items.length === 0 && mode !== "regex") {
       const fuzzy = unwrap(
         finder.grep(query, {
           ...grepOptions,
@@ -322,14 +327,18 @@ export class RootContext {
       );
       if (fuzzy.items.length > 0) {
         value = fuzzy;
-        fuzzyFallback = true;
+        usedFuzzy = true;
       }
     }
     return {
       ...this.metadata(),
-      mode: fuzzyFallback ? "fuzzy" : mode,
-      fuzzyFallback,
-      total: value.totalMatched,
+      pattern,
+      mode: usedFuzzy ? "fuzzy" : mode,
+      fuzzyRequested: Boolean(options.fuzzy),
+      // FFF's totalMatched is always items.length, so it is this page, not the
+      // total: report what is shown and whether the engine has more pages.
+      shown: value.items.length,
+      moreRemain: Boolean(value.nextCursor),
       results: value.items.map((item) => ({
         path: item.relativePath,
         line: item.lineNumber,

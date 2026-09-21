@@ -46,8 +46,23 @@ const DETAIL_PROPERTY = {
   type: "string",
   enum: ["summary", "full"],
   description:
-    'summary (default) returns freshness, the resolved root, a short summary, and paths — enough to choose files to open. Pass full only when you need the complete match text or the full graph dump; when a summary reports truncated, the rest is only available through full.',
+    'summary (default) is layer 0: the resolved root, the hit symbols, the files to open next with their relevant line ranges, and what depends on them — no source code, because opening those files yourself is cheaper than us forwarding them. full is layer 1: the whole layer 0 map repeated verbatim, then source (graph) or full match text and metadata (grep/find). Pass full only when you need to quote the code; when a reply says it omitted something, it also says how to get just that part.',
 };
+
+const FRESHNESS_SCHEMA = {
+  status: { type: ["string", "null"] },
+  warning: { type: ["string", "null"] },
+  lastSuccessfulSync: { type: ["string", "null"] },
+  root: { type: ["string", "null"] },
+  rootSource: { type: ["string", "null"] },
+  rootNote: { type: ["string", "null"] },
+  cwdSource: { type: ["string", "null"] },
+  command: { type: "string" },
+  detail: { type: "string", enum: ["summary", "full"] },
+};
+
+const OUTPUT_SCHEMA_NOTE =
+  "Machine fields only. The text block is self-contained and is NOT a serialized copy of this object: codeq deliberately does not repeat the JSON in the text channel (MCP 2025-06-18 SHOULD), because that duplication is what the layered format exists to remove. A client that ignores structuredContent loses numbers, never a decision.";
 
 const TOOLS = [
   {
@@ -71,6 +86,32 @@ const TOOLS = [
       },
       required: ["query"],
     },
+    outputSchema: {
+      type: "object",
+      description: OUTPUT_SCHEMA_NOTE,
+      properties: {
+        ...FRESHNESS_SCHEMA,
+        query: { type: "string" },
+        shown: { type: "integer" },
+        matched: { type: "integer" },
+        indexed: { type: ["integer", "null"] },
+        paths: { type: "array", items: { type: "string" } },
+        weakFolded: { type: "integer" },
+        results: {
+          type: "array",
+          description: 'Only filled when detail is "full".',
+          items: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              score: { type: ["number", "null"] },
+              matchType: { type: ["string", "null"] },
+            },
+          },
+        },
+      },
+      required: ["status", "root", "command", "shown", "paths"],
+    },
     annotations: {
       readOnlyHint: true,
       destructiveHint: false,
@@ -81,7 +122,7 @@ const TOOLS = [
     name: "grep",
     title: "Search file contents",
     description:
-      "Search file contents using the local codeq index (FFF). Auto-detects regex, retries as fuzzy on zero literal hits, and rejects all-match patterns like .*. Indexes the selected root automatically on first use; never ask the user to init. Pass root to search a different repository and path to narrow inside one. Each call uses exactly one root; results from multiple repositories are never merged.",
+      "Search file contents using the local codeq index (FFF). Auto-detects regex and rejects all-match patterns like .*. Matching is exact by default: zero hits means zero hits, and nothing is silently re-run as fuzzy. Pass fuzzy true to also accept approximate names; those replies are labelled [fuzzy] on the first line and name DIFFERENT identifiers. Indexes the selected root automatically on first use; never ask the user to init. Pass root to search a different repository and path to narrow inside one. Each call uses exactly one root; results from multiple repositories are never merged.",
     inputSchema: {
       type: "object",
       properties: {
@@ -102,10 +143,41 @@ const TOOLS = [
           minimum: 0,
           description: "Number of context lines before and after each match",
         },
+        fuzzy: {
+          type: "boolean",
+          description:
+            "Default false. When the exact pattern has zero hits, also try approximate matching. Those results are NOT the same identifier — the reply is labelled [fuzzy] and names what it actually matched, so confirm the spelling before concluding anything from them. Leave it off when you know the identifier.",
+        },
         limit: LIMIT_PROPERTY,
         detail: DETAIL_PROPERTY,
       },
       required: ["pattern"],
+    },
+    outputSchema: {
+      type: "object",
+      description: OUTPUT_SCHEMA_NOTE,
+      properties: {
+        ...FRESHNESS_SCHEMA,
+        pattern: { type: "string" },
+        mode: { type: "string", enum: ["plain", "regex", "fuzzy"] },
+        fuzzy: { type: "boolean" },
+        shown: { type: "integer" },
+        moreRemain: { type: "boolean" },
+        paths: { type: "array", items: { type: "string" } },
+        hits: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              line: { type: "integer" },
+              column: { type: "integer" },
+              text: { type: "string" },
+            },
+          },
+        },
+      },
+      required: ["status", "root", "command", "shown", "moreRemain", "paths"],
     },
     annotations: {
       readOnlyHint: true,
@@ -117,7 +189,7 @@ const TOOLS = [
     name: "graph",
     title: "Explore the code graph",
     description:
-      "Explore related symbols and files with CodeGraph explore. Returns a map of the code — related symbols, files, call paths, and blast radius — to read next, not a written answer, so expect to open the files it names. Do not look for a callers tool. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass root to query a different repository and path to narrow inside one. Each call uses exactly one root. Default detail is a summary plus paths; pass detail full for the complete dump.",
+      "Explore related symbols and files with CodeGraph explore. Returns a map of the code — hit symbols, the files to open next with their relevant line ranges, and the blast radius — to read next, not a written answer, so expect to open the files it names with your own Read. Do not look for a callers tool. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass root to query a different repository and path to narrow inside one. Each call uses exactly one root. The default reply is layer 0 and carries no source code; pass detail full for layer 1, which repeats the map and then adds source with the query's target file first.",
     inputSchema: {
       type: "object",
       properties: {
@@ -132,6 +204,56 @@ const TOOLS = [
         detail: DETAIL_PROPERTY,
       },
       required: ["query"],
+    },
+    outputSchema: {
+      type: "object",
+      description: OUTPUT_SCHEMA_NOTE,
+      properties: {
+        ...FRESHNESS_SCHEMA,
+        query: { type: ["string", "null"] },
+        exactHits: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              symbol: { type: "string" },
+              path: { type: "string" },
+              line: { type: ["integer", "null"] },
+            },
+          },
+        },
+        files: {
+          type: "array",
+          description: "The files to open next, in the order the map lists them.",
+          items: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              symbols: { type: "array", items: { type: "string" } },
+              symbolCount: { type: "integer" },
+              renderedLines: {
+                type: ["array", "null"],
+                items: { type: "integer" },
+              },
+            },
+          },
+        },
+        paths: {
+          type: "array",
+          description: "Same file list as files[].path: what to open next, nothing else.",
+          items: { type: "string" },
+        },
+        alsoRanked: { type: "array", items: { type: "string" } },
+        omitted: {
+          type: "object",
+          properties: {
+            files: { type: "integer" },
+            reason: { type: ["string", "null"] },
+          },
+        },
+        sourceIncluded: { type: "boolean" },
+      },
+      required: ["status", "root", "command", "files", "paths", "sourceIncluded"],
     },
     annotations: {
       readOnlyHint: true,
@@ -294,6 +416,7 @@ function toolRequest(name, args, cwd) {
     if (args.path !== undefined) request.path = String(args.path);
     if (args.root !== undefined) request.root = String(args.root);
     if (args.glob !== undefined) request.glob = String(args.glob);
+    if (args.fuzzy !== undefined) request.fuzzy = Boolean(args.fuzzy);
     if (args.context !== undefined) {
       request.context = positiveInteger(args.context, "context", true);
     }
@@ -426,11 +549,12 @@ export function createMcpServer({
         );
       },
     });
-    const payload = formatMcpToolResult(name, result, {
+    const formatted = formatMcpToolResult(name, result, {
       detail: args?.detail === "full" ? "full" : "summary",
     });
     return {
-      content: [{ type: "text", text: payload.text }],
+      content: [{ type: "text", text: formatted.text }],
+      structuredContent: formatted.structuredContent,
     };
   }
 

@@ -6,7 +6,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createFramedParser, encodeMessage } from "../src/mcp.js";
-import { parseMcpToolText } from "../src/mcp-format.js";
 
 const bin = fileURLToPath(new URL("../bin/codeq.js", import.meta.url));
 
@@ -105,31 +104,79 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
     method: "tools/call",
     params: { name: "grep", arguments: { pattern: ".*" } },
   });
-
   const find = await waitFor(messages, (message) => message.id === 2, 30_000);
   const grep = await waitFor(messages, (message) => message.id === 3, 30_000);
   const graph = await waitFor(messages, (message) => message.id === 4, 120_000);
   const wildcard = await waitFor(messages, (message) => message.id === 5, 10_000);
 
-  const findPayload = parseMcpToolText(find.result.content[0].text);
-  const grepPayload = parseMcpToolText(grep.result.content[0].text);
-  const graphPayload = parseMcpToolText(graph.result.content[0].text);
+  const findPayload = find.result.structuredContent;
+  const grepPayload = grep.result.structuredContent;
+  const graphPayload = graph.result.structuredContent;
 
   assert.equal(find.result.isError, undefined);
   assert.equal(grep.result.isError, undefined);
-  assert.equal(graph.result.isError, undefined);
+  assert.equal(graph.result.isError, undefined, graph.result.content[0].text);
   assert.match(find.result.content[0].text, /^\[(ready|indexing|degraded)\]/);
   assert.match(find.result.content[0].text, /lastSuccessfulSync|root /);
   assert.equal(findPayload.command, "find");
   assert.ok(findPayload.paths?.some((item) => item.endsWith("session.ts")));
-  assert.ok(grepPayload.results.some((item) => item.path.endsWith("session.ts")));
+  assert.match(find.result.content[0].text, /^src\/session\.ts$/m);
+
+  assert.ok(grepPayload.hits.some((item) => item.path.endsWith("session.ts")));
   assert.equal(grepPayload.mode, "regex");
-  assert.ok(
-    String(graphPayload.result || graphPayload.summary || "").includes(
-      "createSession",
-    ),
-  );
+  assert.equal(grepPayload.fuzzy, false);
+  assert.match(grep.result.content[0].text, /^src\/session\.ts:1:\d+ /m);
+
+  const graphText = graph.result.content[0].text;
+  assert.equal(graphText.includes("```"), false);
+  assert.equal(/verbatim/i.test(graphText), false);
+  assert.equal(/already performed/i.test(graphText), false);
+  assert.equal(graphText.includes("codegraph_explore"), false);
+  assert.match(graphText, /open these files/);
+  assert.match(graphText, /createSession/);
+  assert.equal(graphPayload.sourceIncluded, false);
+  assert.ok(graphPayload.files.some((file) => file.path.endsWith("session.ts")));
+  assert.ok(graphPayload.paths.every((path) => !path.startsWith("../")));
   assert.equal(wildcard.result.isError, true);
   assert.match(wildcard.result.content[0].text, /matches everything/);
+
+  send({
+    jsonrpc: "2.0",
+    id: 6,
+    method: "tools/call",
+    params: { name: "graph", arguments: { query: "createSession", detail: "full" } },
+  });
+  send({
+    jsonrpc: "2.0",
+    id: 7,
+    method: "tools/call",
+    params: { name: "grep", arguments: { pattern: "createSessionn" } },
+  });
+  send({
+    jsonrpc: "2.0",
+    id: 8,
+    method: "tools/call",
+    params: { name: "grep", arguments: { pattern: "createSessionn", fuzzy: true } },
+  });
+
+  const graphFull = await waitFor(messages, (message) => message.id === 6, 120_000);
+  const fullText = graphFull.result.content[0].text;
+  assert.equal(graphFull.result.structuredContent.sourceIncluded, true);
+  assert.match(fullText, /```/);
+  assert.equal(fullText.includes("codegraph_explore"), false);
+  const mapOf = (text) => text.split("\n").slice(1).join("\n");
+  assert.equal(mapOf(fullText).startsWith(mapOf(graph.result.content[0].text)), true);
+
+  const typo = await waitFor(messages, (message) => message.id === 7, 30_000);
+  assert.equal(typo.result.structuredContent.shown, 0);
+  assert.equal(typo.result.content[0].text.split("\n")[0].includes("[fuzzy]"), false);
+  assert.match(typo.result.content[0].text, /0 matches, exact/);
+  assert.match(typo.result.content[0].text, /pass fuzzy: true/);
+
+  const approximate = await waitFor(messages, (message) => message.id === 8, 30_000);
+  assert.equal(approximate.result.structuredContent.mode, "fuzzy");
+  assert.match(approximate.result.content[0].text.split("\n")[0], /^\[\w+\]\[fuzzy\]/);
+  assert.match(approximate.result.content[0].text, /DIFFERENT identifiers/);
+
   assert.equal(existsSync(join(repo, ".codegraph")), false);
 });

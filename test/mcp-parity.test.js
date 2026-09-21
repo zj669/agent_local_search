@@ -14,7 +14,6 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { createFramedParser, encodeMessage } from "../src/mcp.js";
-import { parseMcpToolText } from "../src/mcp-format.js";
 
 const bin = fileURLToPath(new URL("../bin/codeq.js", import.meta.url));
 
@@ -179,7 +178,7 @@ class McpSession {
       message,
       isError: Boolean(message.result?.isError),
       text,
-      payload: message.result?.isError ? null : parseMcpToolText(text),
+      payload: message.result?.structuredContent ?? null,
     };
   }
 
@@ -463,7 +462,7 @@ test(
       cwd: repoWt,
       env,
     });
-    assert.equal(mcpFindMain.payload.total, 0);
+    assert.equal(mcpFindMain.payload.shown, 0);
     assert.equal(cliFindMain.total, 0);
 
     const mcpGrepWt = await session.call("grep", {
@@ -475,8 +474,9 @@ test(
     });
     assert.equal(mcpGrepWt.payload.root, repoWt);
     assert.equal(cliGrepWt.root, repoWt);
-    assert.ok(mcpGrepWt.payload.total > 0);
-    assert.ok(cliGrepWt.total > 0);
+    assert.ok(mcpGrepWt.payload.shown > 0);
+    assert.equal(mcpGrepWt.payload.shown, cliGrepWt.shown);
+    assert.equal(cliGrepWt.moreRemain, false);
 
     const mcpGrepMain = await session.call("grep", {
       pattern: "ALPHA_MAIN_CHECKOUT_TOKEN",
@@ -485,8 +485,9 @@ test(
       cwd: repoWt,
       env,
     });
-    assert.equal(mcpGrepMain.payload.total, 0);
-    assert.equal(cliGrepMain.total, 0);
+    assert.equal(mcpGrepMain.payload.shown, 0);
+    assert.equal(cliGrepMain.shown, 0);
+    assert.equal(cliGrepMain.mode, "plain");
 
     const mcpGraphWt = await session.call(
       "graph",
@@ -505,10 +506,51 @@ test(
       true,
       mcpGraphWt.text.split("\n")[0],
     );
-    const graphText = `${mcpGraphWt.payload.result || ""} ${mcpGraphWt.payload.summary || ""}`;
+    const graphText = mcpGraphWt.text;
     assert.match(graphText, /AlphaWorktreeWidget/);
     assert.doesNotMatch(graphText, /AlphaMainWidget/);
+    assert.equal(graphText.includes("```"), false);
+    assert.equal(/verbatim/i.test(graphText), false);
+    assert.equal(graphText.includes("codegraph_explore"), false);
+    assert.match(graphText, /open these files/);
+    assert.equal(mcpGraphWt.payload.sourceIncluded, false);
+    assert.ok(
+      mcpGraphWt.payload.paths.some((path) =>
+        path.endsWith("AlphaWorktreeWidget.ts"),
+      ),
+    );
+    // --json is the machine anchor and stays the whole daemon result.
     assert.match(String(cliGraphWt.result), /AlphaWorktreeWidget/);
+    assert.match(String(cliGraphWt.result), /Source Code/);
+
+    // Human CLI prints the same layer 0 map as MCP, not the engine dump.
+    const cliGraphHuman = cli(
+      ["graph", "alphaWorktreeBeacon AlphaWorktreeWidget"],
+      { cwd: repoWt, env, timeout: 180_000 },
+    );
+    assert.equal(cliGraphHuman.ok, true, cliGraphHuman.stderr);
+    assert.equal(cliGraphHuman.stdout.includes("```"), false);
+    assert.equal(/verbatim/i.test(cliGraphHuman.stdout), false);
+    assert.match(cliGraphHuman.stdout, /open these files/);
+    assert.equal(
+      cliGraphHuman.stdout.trimEnd(),
+      mcpGraphWt.text.split("\n").slice(1).join("\n"),
+    );
+
+    const cliGraphFull = cli(
+      ["--full", "graph", "alphaWorktreeBeacon AlphaWorktreeWidget"],
+      { cwd: repoWt, env, timeout: 180_000 },
+    );
+    assert.equal(cliGraphFull.ok, true, cliGraphFull.stderr);
+    assert.match(cliGraphFull.stdout, /```/);
+    assert.equal(
+      cliGraphFull.stdout.startsWith(cliGraphHuman.stdout.trimEnd()),
+      true,
+    );
+    assert.deepEqual(
+      mcpGraphWt.payload.paths,
+      mcpGraphWt.payload.files.map((file) => file.path),
+    );
 
     const mcpFindB = await session.call("find", {
       query: "BetaUniqueModule",
@@ -541,7 +583,7 @@ test(
       path: repoB,
     });
     assert.equal(mcpGrepB.payload.root, repoB);
-    assert.ok(mcpGrepB.payload.total > 0);
+    assert.ok(mcpGrepB.payload.shown > 0);
 
     const mcpFindC = await session.call("find", {
       query: "CharlieUniqueModule",
@@ -593,9 +635,9 @@ test(
       ),
     );
     assert.equal(mcpDefaultBeta.payload.root, repoWt);
-    assert.equal(mcpDefaultBeta.payload.total, 0);
+    assert.equal(mcpDefaultBeta.payload.shown, 0);
     assert.equal(mcpDefaultCharlie.payload.root, repoWt);
-    assert.equal(mcpDefaultCharlie.payload.total, 0);
+    assert.equal(mcpDefaultCharlie.payload.shown, 0);
     for (const reply of [mcpDefault, mcpDefaultBeta, mcpDefaultCharlie]) {
       assert.equal(
         reply.text.split("\n")[0].includes(`root ${repoWt} via cwd (spawn cwd)`),

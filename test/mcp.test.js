@@ -13,7 +13,6 @@ import {
   negotiateProtocolVersion,
   NO_WORKSPACE_ERROR,
 } from "../src/mcp.js";
-import { parseMcpToolText } from "../src/mcp-format.js";
 
 const { version } = createRequire(import.meta.url)("../package.json");
 
@@ -330,9 +329,9 @@ test("tools map 1:1 onto daemon find/grep/graph requests", async () => {
       const graph = await waitFor((message) => message.id === 4);
 
       assert.equal(find.result.isError, undefined);
-      assert.equal(parseMcpToolText(find.result.content[0].text).command, "find");
-      assert.equal(parseMcpToolText(grep.result.content[0].text).command, "grep");
-      assert.equal(parseMcpToolText(graph.result.content[0].text).command, "graph");
+      assert.equal(find.result.structuredContent.command, "find");
+      assert.equal(grep.result.structuredContent.command, "grep");
+      assert.equal(graph.result.structuredContent.command, "graph");
       assert.match(find.result.content[0].text, /^\[indexing\]/);
 
       assert.deepEqual(seen[0], {
@@ -499,7 +498,7 @@ test("omitting root searches the spawn cwd and the reply names it", async () => 
         defaultedText.split("\n")[0],
         "[ready] root /repos/worktree via cwd (spawn cwd)",
       );
-      const defaultedPayload = parseMcpToolText(defaultedText);
+      const defaultedPayload = defaulted.result.structuredContent;
       assert.equal(defaultedPayload.root, "/repos/worktree");
       assert.equal(defaultedPayload.rootSource, "cwd");
       assert.equal(defaultedPayload.cwdSource, "spawn cwd");
@@ -523,7 +522,7 @@ test("omitting root searches the spawn cwd and the reply names it", async () => 
         retriedText.split("\n")[0],
         "[ready] root /repos/leagent via root argument",
       );
-      assert.equal(parseMcpToolText(retriedText).rootSource, "root");
+      assert.equal(retried.result.structuredContent.rootSource, "root");
     },
   );
 });
@@ -794,11 +793,22 @@ test("tool descriptions say when to pass root and how to shape a query", async (
         tool.inputSchema.properties.root.description,
         /not the session cwd/,
       );
-      assert.match(
-        tool.inputSchema.properties.detail.description,
-        /complete match text or the full graph dump/,
-      );
+      assert.match(tool.inputSchema.properties.detail.description, /layer 0/);
+      assert.match(tool.inputSchema.properties.detail.description, /layer 1/);
+      assert.match(tool.inputSchema.properties.detail.description, /no source code/);
+      assert.equal(Boolean(tool.outputSchema), true);
     }
+    assert.match(
+      tools.grep.inputSchema.properties.fuzzy.description,
+      /Default false/,
+    );
+    assert.match(
+      tools.grep.inputSchema.properties.fuzzy.description,
+      /NOT the same identifier/,
+    );
+    assert.equal(tools.grep.description.includes("retries as fuzzy"), false);
+    assert.match(tools.grep.description, /zero hits means zero hits/);
+    assert.match(tools.graph.description, /carries no source code/);
     assert.match(
       tools.grep.inputSchema.properties.pattern.description,
       /One identifier or one regex/,
@@ -812,6 +822,15 @@ test("tool descriptions say when to pass root and how to shape a query", async (
 });
 
 test("MCP replies start with freshness and keep a graph budget", async () => {
+  const section = (path, first) =>
+    [
+      `**\`${path}\`** — symbol(function), +3 more`,
+      "",
+      "```javascript",
+      ...Array.from({ length: 200 }, (_, i) => `${first + i}\tconst v${i} = ${i};`),
+      "```",
+      "",
+    ].join("\n");
   await withServer(
     {
       query: async () => ({
@@ -819,7 +838,16 @@ test("MCP replies start with freshness and keep a graph budget", async () => {
         warning: "stale",
         lastSuccessfulSync: "2026-09-21T10:00:00.000Z",
         root: "/repo",
-        result: `src/app.ts\n${"line\n".repeat(900)}`,
+        result: [
+          "Found 40 symbols across 2 files.",
+          "",
+          "**Source Code**",
+          "",
+          "> The code below is the **verbatim, current on-disk source** of these files. Treat each block as a Read you have already performed.",
+          "",
+          section("src/app.ts", 1),
+          section("src/auth.ts", 40),
+        ].join("\n"),
       }),
     },
     async ({ send, waitFor }) => {
@@ -837,14 +865,114 @@ test("MCP replies start with freshness and keep a graph budget", async () => {
         params: { name: "graph", arguments: { query: "auth" } },
       });
       const graph = await waitFor((message) => message.id === 2);
-      assert.match(
-        graph.result.content[0].text,
-        /^\[degraded\] root \/repo lastSuccessfulSync /,
-      );
-      const payload = parseMcpToolText(graph.result.content[0].text);
-      assert.equal(payload.truncated, true);
-      assert.equal(payload.result, undefined);
-      assert.match(payload.hint, /detail: "full"/);
+      const text = graph.result.content[0].text;
+      assert.match(text, /^\[degraded\] root \/repo lastSuccessfulSync /);
+      assert.equal(text.includes("```"), false);
+      assert.equal(/verbatim/i.test(text), false);
+      assert.equal(/already performed/i.test(text), false);
+      assert.ok(text.length <= 1_500, `layer 0 is ${text.length} chars`);
+      const payload = graph.result.structuredContent;
+      assert.equal(payload.sourceIncluded, false);
+      assert.deepEqual(payload.paths, ["src/app.ts", "src/auth.ts"]);
+      assert.deepEqual(payload.files[1].renderedLines, [40, 239]);
+      assert.match(text, /no source in this map\./);
+    },
+  );
+});
+
+test("machine fields ride structuredContent, not a JSON copy in the text", async () => {
+  await withServer(
+    {
+      query: async (request) => ({
+        root: "/repo",
+        status: "ready",
+        rootSource: "cwd",
+        cwdSource: "spawn cwd",
+        query: request.query,
+        pattern: request.query,
+        total: 1,
+        shown: 1,
+        moreRemain: false,
+        mode: "plain",
+        results: [
+          { path: "src/app.ts", line: 3, column: 5, text: "const app = 1;" },
+        ],
+      }),
+    },
+    async ({ send, waitFor }) => {
+      send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {} },
+      });
+      await waitFor((message) => message.id === 1);
+      send({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "grep", arguments: { pattern: "app" } },
+      });
+      const grep = await waitFor((message) => message.id === 2);
+      const text = grep.result.content[0].text;
+      assert.equal(grep.result.structuredContent.command, "grep");
+      assert.equal(grep.result.structuredContent.shown, 1);
+      assert.deepEqual(grep.result.structuredContent.paths, ["src/app.ts"]);
+      assert.equal(text.includes('"paths"'), false);
+      assert.equal(text.includes('"command": "grep"'), false);
+      assert.match(text, /^src\/app\.ts:3:5 const app = 1;$/m);
+    },
+  );
+});
+
+test("grep only goes fuzzy when the call asks for it", async () => {
+  const seen = [];
+  await withServer(
+    {
+      query: async (request) => {
+        seen.push(request);
+        return {
+          root: "/repo",
+          status: "ready",
+          pattern: request.query,
+          mode: "plain",
+          shown: 0,
+          moreRemain: false,
+          results: [],
+        };
+      },
+    },
+    async ({ send, waitFor }) => {
+      send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {} },
+      });
+      await waitFor((message) => message.id === 1);
+      send({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "grep", arguments: { pattern: "PG_DATABASE_URL" } },
+      });
+      const plain = await waitFor((message) => message.id === 2);
+      assert.equal(seen[0].fuzzy, undefined);
+      assert.equal(plain.result.content[0].text.split("\n")[0].includes("[fuzzy]"), false);
+      assert.match(plain.result.content[0].text, /0 matches, exact/);
+      assert.match(plain.result.content[0].text, /pass fuzzy: true/);
+
+      send({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "grep",
+          arguments: { pattern: "PG_DATABASE_URL", fuzzy: true },
+        },
+      });
+      await waitFor((message) => message.id === 3);
+      assert.equal(seen[1].fuzzy, true);
     },
   );
 });
