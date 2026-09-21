@@ -94,17 +94,18 @@ test("root must exist, and says what to pass when it does not", async () => {
   );
 });
 
-test("a subdirectory passed as root keeps its own index and says so", async () => {
+test("a subdirectory passed as root narrows its repository instead of indexing itself", async () => {
   const parent = mkdtempSync(join(tmpdir(), "codeq-subdir-root-"));
   const repo = repository(parent, "repo");
   const subdirectory = join(repo, "src");
 
   const routed = await resolveRequestRoot({ cwd: repo, root: subdirectory });
-  assert.equal(routed.root, subdirectory);
-  assert.equal(routed.constraint, null);
+  assert.equal(routed.root, repo);
+  assert.equal(routed.constraint, "src/");
   assert.equal(routed.source, "root");
-  assert.match(routed.note, new RegExp(`subdirectory of ${repo}`));
-  assert.match(routed.note, new RegExp(`pass root ${repo} with path src`));
+  assert.match(routed.note, /root named a subdirectory/);
+  assert.match(routed.note, /narrowed to src\/ instead of a second index/);
+  assert.match(routed.note, /pass a subdirectory as path, not root/);
 
   const checkout = await resolveRequestRoot({ cwd: repo, root: repo });
   assert.equal(checkout.root, repo);
@@ -114,6 +115,91 @@ test("a subdirectory passed as root keeps its own index and says so", async () =
   assert.equal(narrowed.root, repo);
   assert.equal(narrowed.constraint, "src/");
   assert.equal(narrowed.note, null);
+});
+
+test("a nested checkout passed as root is still its own repository", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "codeq-nested-checkout-"));
+  const outer = repository(parent, "outer");
+  const inner = repository(join(outer, "vendor"), "inner");
+
+  const routed = await resolveRequestRoot({ cwd: outer, root: inner });
+  assert.equal(routed.root, inner);
+  assert.equal(routed.constraint, null);
+  assert.equal(routed.note, null);
+});
+
+test("one root plus many paths is one index: paths only narrow the call", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "codeq-path-scope-"));
+  const repo = repository(parent, "repo");
+  mkdirSync(join(repo, "src", "agent"), { recursive: true });
+  writeFileSync(join(repo, "src", "agent", "global.py"), "class GlobalAgent:\n    pass\n");
+
+  const directory = await resolveRequestRoot({ cwd: repo, root: repo, path: "src/agent" });
+  const file = await resolveRequestRoot({
+    cwd: repo,
+    root: repo,
+    path: "src/agent/global.py",
+  });
+  const absolute = await resolveRequestRoot({
+    cwd: repo,
+    root: repo,
+    path: join(repo, "src", "agent"),
+  });
+  const whole = await resolveRequestRoot({ cwd: repo, root: repo });
+
+  for (const routed of [directory, file, absolute, whole]) {
+    assert.equal(routed.root, repo);
+    assert.equal(routed.source, "root");
+  }
+  assert.equal(directory.constraint, "src/agent/");
+  assert.equal(file.constraint, "src/agent/global.py");
+  assert.equal(absolute.constraint, "src/agent/");
+  assert.equal(whole.constraint, null);
+});
+
+test("a relative path joins the selected root, not the session cwd", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "codeq-path-join-"));
+  const session = repository(parent, "session");
+  const other = repository(parent, "other");
+  mkdirSync(join(other, "src", "agent"), { recursive: true });
+  writeFileSync(join(other, "src", "agent", "global.py"), "class GlobalAgent:\n    pass\n");
+  // The same relative path exists in the session repository, so resolving
+  // against the cwd would silently search the wrong tree instead of missing.
+  mkdirSync(join(session, "src", "agent"), { recursive: true });
+  writeFileSync(join(session, "src", "agent", "decoy.py"), "decoy = 1\n");
+
+  const routed = await resolveRequestRoot({
+    cwd: session,
+    root: other,
+    path: "src/agent",
+  });
+  assert.equal(routed.root, other);
+  assert.equal(routed.constraint, "src/agent/");
+  assert.equal(routed.target, join(other, "src", "agent"));
+  assert.equal(routed.source, "root");
+});
+
+test("a path that does not exist is an error naming the joined absolute path", async () => {
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), "codeq-missing-path-")));
+  mkdirSync(join(repo, "src"), { recursive: true });
+
+  await assert.rejects(
+    resolveRequestRoot({ cwd: repo, root: repo, path: "src/no_such_dir" }),
+    (error) => {
+      assert.match(error.message, /path not found: src\/no_such_dir/);
+      assert.ok(
+        error.message.includes(join(repo, "src", "no_such_dir")),
+        error.message,
+      );
+      assert.match(error.message, /not a fuzzy fragment and not a glob/);
+      return true;
+    },
+  );
+
+  await assert.rejects(
+    resolveRequestRoot({ cwd: repo, path: "src/no_such_dir" }),
+    /path not found: src\/no_such_dir/,
+  );
 });
 
 test("a linked worktree resolves to its own checkout", async () => {

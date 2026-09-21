@@ -18,13 +18,13 @@ const ROOTS_LIST_TIMEOUT_MS = 5_000;
 const PATH_PROPERTY = {
   type: "string",
   description:
-    "Narrow the search inside the selected repository: a directory (src/, mr_review_service, mr_review_service/profiles) or a single file (src/leagent/chat/policy_selector.py). This is the only way to scope a search; it reuses the repository index instead of building a second one. Paths are relative to the session cwd; absolute, ~/, and ../ paths that leave the workspace switch to that repository, but prefer root for that. Each call uses exactly one root.",
+    "Narrow this one call inside the selected repository: a directory (src/, mr_review_service, mr_review_service/profiles) or a single file (src/leagent/chat/policy_selector.py). This is the only way to scope a search, and it never creates or switches an index: every path in a repository reuses that repository's one index. A relative path is joined to root when root is passed, otherwise to the session cwd; absolute, ~/, and ../ paths that leave the workspace switch to that repository, but prefer root for that. A path that does not exist is an error that names the absolute path tried, not a silent search of the whole repository. Each call uses exactly one root.",
 };
 
 const ROOT_PROPERTY = {
   type: "string",
   description:
-    "Absolute path of the repository, checkout, or worktree to search, for this call only, overriding Git/cwd detection. Pass it whenever the repository you are asking about is not the session cwd: a second clone, another checkout or worktree, or any repository when the server was spawned from $HOME. Omitting it silently searches the session cwd, which is the wrong tree when your question is about another repository. root is not a scope: a subdirectory passed as root becomes its own separate index instead of a narrower search, and a file passed as root falls back to the repository holding it. To scope a search, keep root at the checkout and pass path. Every reply names the resolved root and where it came from; if that root is not the repository you meant, retry with root.",
+    "Absolute path of the repository, checkout, or worktree to search, for this call only, overriding Git/cwd detection. Pass it whenever the repository you are asking about is not the session cwd: a second clone, another checkout or worktree, or any repository when the server was spawned from $HOME. Omitting it silently searches the session cwd, which is the wrong tree when your question is about another repository. root is the only thing that selects an index, and one repository has one index: a subdirectory or a file passed as root resolves to the repository that holds it, narrowed to that subdirectory or file, and says so in the reply. To scope a search, keep root at the checkout and pass path. Every reply names the resolved root and where it came from; if that root is not the repository you meant, retry with root.",
 };
 
 export const NO_WORKSPACE_ERROR =

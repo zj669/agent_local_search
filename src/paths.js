@@ -31,6 +31,8 @@ export function daemonPaths(base = dataHome()) {
     pid: join(daemonDir, "daemon.pid"),
     registry: join(daemonDir, "registry.json"),
     log: join(daemonDir, "logs", "daemon.log"),
+    startLock: join(daemonDir, "autostart.lock"),
+    bindLock: join(daemonDir, "bind.lock"),
   };
 }
 
@@ -42,6 +44,7 @@ export function rootBucket(base, canonicalRoot) {
     bucket,
     graphDir: join(bucket, "codegraph"),
     metadata: join(bucket, "root.json"),
+    graphLock: join(bucket, "codegraph.lock"),
   };
 }
 
@@ -122,12 +125,13 @@ export function isUnusableWorkspace(dir) {
 
 export async function resolveRequestRoot(request) {
   const cwd = canonical(request.cwd || process.cwd());
-  const targetAbsolute = request.path ? expandPath(request.path, cwd) : cwd;
-  const targetExisting = canonical(existingDirectory(targetAbsolute));
   let root;
   let source;
   let note = null;
-  let fileConstraint = null;
+  let rootConstraint = null;
+  // Relative path joins the selected root, not the session cwd: the caller who
+  // passes root /other/repo with path src/agent means that repository's src/agent.
+  let pathBase = cwd;
 
   if (request.root) {
     const explicit = expandPath(request.root, cwd);
@@ -138,7 +142,19 @@ export async function resolveRequestRoot(request) {
     }
     source = "root";
     if (statSync(explicit).isDirectory()) {
-      root = canonical(explicit);
+      const directory = canonical(explicit);
+      pathBase = directory;
+      // An index belongs to a repository, so a subdirectory narrows the
+      // repository that holds it instead of opening a second index.
+      const worktree = await enclosingWorktree(directory);
+      if (worktree) {
+        root = worktree;
+        const inside = relativePath(worktree, directory);
+        rootConstraint = `${inside}/`;
+        note = `root named a subdirectory, so it resolved to this repository narrowed to ${inside}/ instead of a second index; pass a subdirectory as path, not root`;
+      } else {
+        root = directory;
+      }
     } else if (request.path) {
       throw new Error(
         `root names a file and path was also passed: ${explicit}. Pass root as the repository checkout and put the file in path.`,
@@ -146,10 +162,24 @@ export async function resolveRequestRoot(request) {
     } else {
       const file = canonical(explicit);
       root = (await gitRoot(dirname(file))) || dirname(file);
-      fileConstraint = relativePath(root, file);
-      note = `root named a file, so it resolved to this repository narrowed to ${fileConstraint}; pass a file as path, not root`;
+      pathBase = root;
+      rootConstraint = relativePath(root, file);
+      note = `root named a file, so it resolved to this repository narrowed to ${rootConstraint}; pass a file as path, not root`;
     }
-  } else {
+  }
+
+  const targetAbsolute = request.path ? expandPath(request.path, pathBase) : pathBase;
+  if (request.path && !existsSync(targetAbsolute)) {
+    throw new Error(
+      `path not found: ${request.path} resolved to ${targetAbsolute}, which does not exist. ` +
+        `path is a directory or a single file inside ${
+          request.root ? `root ${pathBase}` : `the selected repository`
+        }, joined to it when relative — not a fuzzy fragment and not a glob.`,
+    );
+  }
+
+  if (!request.root) {
+    const targetExisting = canonical(existingDirectory(targetAbsolute));
     source = request.path ? "path" : "cwd";
     root = await gitRoot(targetExisting);
     if (!root) {
@@ -169,16 +199,7 @@ export async function resolveRequestRoot(request) {
     throw new Error(`refusing to index ${root}: it is ${unsafe}`);
   }
 
-  if (source === "root" && !note) {
-    const worktree = await enclosingWorktree(root);
-    if (worktree) {
-      note =
-        `root is a subdirectory of ${worktree} and carries its own index; ` +
-        `to search the whole repository pass root ${worktree} with path ${relativePath(worktree, root)}`;
-    }
-  }
-
-  let constraint = fileConstraint;
+  let constraint = rootConstraint;
   if (request.path) {
     const rel = relative(root, targetAbsolute);
     if (rel && (rel.startsWith("..") || isAbsolute(rel))) {
@@ -188,7 +209,7 @@ export async function resolveRequestRoot(request) {
     }
     if (rel && rel !== ".") {
       constraint = rel.split(sep).join("/");
-      if (existsSync(targetAbsolute) && statSync(targetAbsolute).isDirectory()) {
+      if (statSync(targetAbsolute).isDirectory()) {
         constraint += "/";
       }
     }
