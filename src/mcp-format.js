@@ -11,12 +11,24 @@ When to use which tool:
 
 Indexing starts on tools/call, never on initialize or tools/list. Prefer roots/list when the client gives a real project folder (not $HOME or /); otherwise use process.cwd() if that is a project. If the server was spawned from $HOME, pass path or root on the call. Pass path or root to search a different repository. Each call uses exactly one root.
 
-Default replies start with a freshness line, then a short summary and paths. Pass detail: "full" when you need complete match text or the full graph dump. If truncated is true, more remains — request detail "full" instead of guessing.`;
+Every reply names the resolved absolute root and where it came from: "root <abs> via root argument", "via path argument", or "via cwd (roots/list | spawn cwd | cwd argument | shell cwd)". Read that line. When the root is not the repository you asked about — the usual cause is omitting root while working across two repositories — retry the same call with root set to that repository instead of interpreting the result.
+
+Default replies start with that line, then a short summary and paths. Pass detail: "full" when you need complete match text or the full graph dump. If truncated is true, more remains — request detail "full" instead of guessing.`;
+
+export function rootOrigin(result = {}) {
+  if (result.rootSource === "root") return "root argument";
+  if (result.rootSource === "path") return "path argument";
+  if (result.rootSource !== "cwd") return null;
+  return result.cwdSource ? `cwd (${result.cwdSource})` : "cwd";
+}
 
 export function freshnessLine(result = {}) {
   const status = result.status || "unknown";
   const parts = [`[${status}]`];
-  if (result.root) parts.push(`root ${result.root}`);
+  if (result.root) {
+    const origin = rootOrigin(result);
+    parts.push(`root ${result.root}${origin ? ` via ${origin}` : ""}`);
+  }
   if (result.lastSuccessfulSync) {
     parts.push(`lastSuccessfulSync ${result.lastSuccessfulSync}`);
   }
@@ -57,6 +69,8 @@ function freshnessFields(command, result) {
     warning: result.warning ?? null,
     lastSuccessfulSync: result.lastSuccessfulSync ?? null,
     root: result.root ?? null,
+    rootSource: result.rootSource ?? null,
+    cwdSource: result.cwdSource ?? null,
     command,
   };
 }

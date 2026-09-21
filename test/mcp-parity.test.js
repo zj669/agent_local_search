@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
@@ -78,6 +78,21 @@ function cliJson(args, options) {
   const result = cli(["--json", ...args], options);
   assert.equal(result.ok, true, result.stderr || result.stdout);
   return JSON.parse(result.stdout);
+}
+
+function cliStatusLine(args, { cwd, env, timeout = 60_000 }) {
+  const result = spawnSync(process.execPath, [bin, ...args], {
+    cwd,
+    env,
+    encoding: "utf8",
+    timeout,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+  const line = result.stderr
+    .split("\n")
+    .find((candidate) => candidate.startsWith("["));
+  assert.ok(line, result.stderr);
+  return line;
 }
 
 class McpSession {
@@ -322,6 +337,19 @@ test(
     assert.equal(mcpFindWt.isError, false, mcpFindWt.text);
     assert.equal(mcpFindWt.payload.root, repoWt);
     assert.equal(cliFindWt.root, repoWt);
+    assert.equal(
+      mcpFindWt.text.split("\n")[0].includes(`root ${repoWt} via cwd (spawn cwd)`),
+      true,
+      mcpFindWt.text.split("\n")[0],
+    );
+    assert.equal(mcpFindWt.payload.rootSource, "cwd");
+    assert.equal(mcpFindWt.payload.cwdSource, "spawn cwd");
+    assert.equal(cliFindWt.rootSource, "cwd");
+    assert.equal(cliFindWt.cwdSource, "shell cwd");
+    assert.match(
+      cliStatusLine(["find", "AlphaWorktreeWidget"], { cwd: repoWt, env }),
+      new RegExp(`^\\[\\w+\\] root ${repoWt} via cwd \\(shell cwd\\)`),
+    );
     assert.ok(
       mcpFindWt.payload.paths.some((path) =>
         path.endsWith("AlphaWorktreeWidget.ts"),
@@ -376,6 +404,11 @@ test(
     assert.equal(mcpGraphWt.isError, false, mcpGraphWt.text);
     assert.equal(mcpGraphWt.payload.root, repoWt);
     assert.equal(cliGraphWt.root, repoWt);
+    assert.equal(
+      mcpGraphWt.text.split("\n")[0].includes(`root ${repoWt} via cwd (spawn cwd)`),
+      true,
+      mcpGraphWt.text.split("\n")[0],
+    );
     const graphText = `${mcpGraphWt.payload.result || ""} ${mcpGraphWt.payload.summary || ""}`;
     assert.match(graphText, /AlphaWorktreeWidget/);
     assert.doesNotMatch(graphText, /AlphaMainWidget/);
@@ -391,6 +424,13 @@ test(
     });
     assert.equal(mcpFindB.payload.root, repoB);
     assert.equal(cliFindB.root, repoB);
+    assert.equal(
+      mcpFindB.text.split("\n")[0].includes(`root ${repoB} via path argument`),
+      true,
+      mcpFindB.text.split("\n")[0],
+    );
+    assert.equal(mcpFindB.payload.rootSource, "path");
+    assert.equal(cliFindB.rootSource, "path");
     assert.deepEqual(
       mcpFindB.payload.paths.filter((path) => path.endsWith("UniqueModule.ts")),
       ["src/BetaUniqueModule.ts"],
@@ -417,6 +457,20 @@ test(
     });
     assert.equal(mcpFindC.payload.root, repoC);
     assert.equal(cliFindC.root, repoC);
+    assert.equal(
+      mcpFindC.text.split("\n")[0].includes(`root ${repoC} via root argument`),
+      true,
+      mcpFindC.text.split("\n")[0],
+    );
+    assert.equal(mcpFindC.payload.rootSource, "root");
+    assert.equal(cliFindC.rootSource, "root");
+    assert.match(
+      cliStatusLine(["find", "CharlieUniqueModule", "--root", repoC], {
+        cwd: repoWt,
+        env,
+      }),
+      new RegExp(`^\\[\\w+\\] root ${repoC} via root argument`),
+    );
     assert.ok(
       mcpFindC.payload.paths.some((path) =>
         path.endsWith("CharlieUniqueModule.ts"),
@@ -446,6 +500,15 @@ test(
     assert.equal(mcpDefaultBeta.payload.total, 0);
     assert.equal(mcpDefaultCharlie.payload.root, repoWt);
     assert.equal(mcpDefaultCharlie.payload.total, 0);
+    for (const reply of [mcpDefault, mcpDefaultBeta, mcpDefaultCharlie]) {
+      assert.equal(
+        reply.text.split("\n")[0].includes(`root ${repoWt} via cwd (spawn cwd)`),
+        true,
+        reply.text.split("\n")[0],
+      );
+      assert.equal(reply.payload.rootSource, "cwd");
+      assert.equal(reply.payload.cwdSource, "spawn cwd");
+    }
 
     noDotCodegraph(repoA, repoWt, repoB, repoC);
 
@@ -472,6 +535,7 @@ test(
     });
     assert.equal(homeFindB.isError, false, homeFindB.text);
     assert.equal(homeFindB.payload.root, repoB);
+    assert.equal(homeFindB.payload.rootSource, "path");
     assert.ok(
       homeFindB.payload.paths.some((path) => path.endsWith("BetaUniqueModule.ts")),
     );
@@ -496,6 +560,13 @@ test(
     });
     assert.equal(viaRoots.isError, false, viaRoots.text);
     assert.equal(viaRoots.payload.root, repoWt);
+    assert.equal(
+      viaRoots.text.split("\n")[0].includes(`root ${repoWt} via cwd (roots/list)`),
+      true,
+      viaRoots.text.split("\n")[0],
+    );
+    assert.equal(viaRoots.payload.rootSource, "cwd");
+    assert.equal(viaRoots.payload.cwdSource, "roots/list");
     assert.ok(
       viaRoots.payload.paths.some((path) =>
         path.endsWith("AlphaWorktreeWidget.ts"),

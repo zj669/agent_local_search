@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { queryDaemon } from "../src/client.js";
+import { rootOrigin } from "../src/mcp-format.js";
 import { runMcpServer } from "../src/mcp.js";
 
 const USAGE = `Usage:
@@ -47,7 +48,12 @@ function parseArguments(argv) {
   const commandIndex = argv.findIndex((arg) => commands.has(arg));
   if (commandIndex < 0) fail(`unknown command: ${argv.find((arg) => !arg.startsWith("-")) || argv[0]}`);
   const command = argv[commandIndex];
-  const options = { command, cwd: process.cwd(), json: false };
+  const options = {
+    command,
+    cwd: process.cwd(),
+    cwdSource: "shell cwd",
+    json: false,
+  };
   const positionals = [];
   const takesValue = new Set([
     "--root",
@@ -103,7 +109,9 @@ function printStatus(result) {
   const sync = result.lastSuccessfulSync
     ? ` lastSuccessfulSync ${result.lastSuccessfulSync}`
     : "";
-  process.stderr.write(`[${result.status}] root ${result.root}${sync}\n`);
+  const origin = rootOrigin(result);
+  const via = origin ? ` via ${origin}` : "";
+  process.stderr.write(`[${result.status}] root ${result.root}${via}${sync}\n`);
   if (result.warning) process.stderr.write(`warning: ${result.warning}\n`);
 }
 

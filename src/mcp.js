@@ -330,6 +330,7 @@ export function createMcpServer({
 } = {}) {
   const spawnCwd = defaultCwd(fallbackCwd);
   let workspaceCwd = isUnusableWorkspace(spawnCwd) ? null : spawnCwd;
+  let workspaceCwdSource = workspaceCwd ? "spawn cwd" : null;
   let clientSupportsRoots = false;
   let rootsPromise = Promise.resolve();
   const pending = new Map();
@@ -373,6 +374,7 @@ export function createMcpServer({
         const path = fileUriToPath(entry?.uri);
         if (path && !isUnusableWorkspace(path)) {
           workspaceCwd = path;
+          workspaceCwdSource = "roots/list";
           return;
         }
       }
@@ -381,20 +383,24 @@ export function createMcpServer({
 
   function sessionCwd(args) {
     if (args?.cwd != null && String(args.cwd).trim() !== "") {
-      if (!isUnusableWorkspace(args.cwd)) return String(args.cwd);
+      if (!isUnusableWorkspace(args.cwd)) {
+        return { cwd: String(args.cwd), source: "cwd argument" };
+      }
     }
-    return workspaceCwd;
+    return { cwd: workspaceCwd, source: workspaceCwd ? workspaceCwdSource : null };
   }
 
   async function callTool(name, args, meta, signal, framing) {
     await rootsPromise;
-    const cwd = sessionCwd(args);
+    const session = sessionCwd(args);
+    const cwd = session.cwd;
     const hasPath = args?.path != null && String(args.path).trim() !== "";
     const hasRoot = args?.root != null && String(args.root).trim() !== "";
     if (!cwd && !hasPath && !hasRoot) {
       throw new Error(NO_WORKSPACE_ERROR);
     }
     const request = toolRequest(name, args ?? {}, cwd || spawnCwd);
+    request.cwdSource = session.source ?? "spawn cwd";
     const result = await query(request, {
       signal,
       onProgress: (progress) => {

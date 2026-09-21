@@ -7,6 +7,12 @@ import { dirname } from "node:path";
 import { daemonPaths, resolveRequestRoot, rootBucket } from "./paths.js";
 import { RootContext } from "./root-context.js";
 
+const CWD_SOURCES = new Set([
+  "roots/list",
+  "spawn cwd",
+  "cwd argument",
+  "shell cwd",
+]);
 const ROOT_LIMIT = 4;
 const ROOT_TTL_MS = 5 * 60 * 1_000;
 const DAEMON_IDLE_MS = 30 * 60 * 1_000;
@@ -82,7 +88,7 @@ async function execute(request, socket) {
   const context = await contextFor(routed.root);
   const progress = (value) => send(socket, { type: "progress", ...value });
 
-  return context.use(async () => {
+  const result = await context.use(async () => {
     if (request.command === "find") {
       return context.find(request.query, {
         constraint: routed.constraint,
@@ -107,6 +113,12 @@ async function execute(request, socket) {
     }
     throw new Error(`unknown command: ${request.command}`);
   });
+
+  return {
+    ...result,
+    rootSource: routed.source,
+    cwdSource: CWD_SOURCES.has(request.cwdSource) ? request.cwdSource : null,
+  };
 }
 
 const server = createServer((socket) => {

@@ -114,6 +114,7 @@ export async function resolveRequestRoot(request) {
   const targetAbsolute = request.path ? expandPath(request.path, cwd) : cwd;
   const targetExisting = canonical(existingDirectory(targetAbsolute));
   let root;
+  let source;
 
   if (request.root) {
     const explicit = expandPath(request.root, cwd);
@@ -121,12 +122,19 @@ export async function resolveRequestRoot(request) {
       throw new Error(`--root must name an existing directory: ${explicit}`);
     }
     root = canonical(explicit);
+    source = "root";
   } else {
+    source = request.path ? "path" : "cwd";
     root = await gitRoot(targetExisting);
     if (!root) {
       const cwdGit = await gitRoot(cwd);
       const cwdRoot = cwdGit || cwd;
-      root = contains(cwdRoot, targetExisting) ? cwdRoot : targetExisting;
+      if (contains(cwdRoot, targetExisting)) {
+        root = cwdRoot;
+        source = "cwd";
+      } else {
+        root = targetExisting;
+      }
     }
   }
 
@@ -149,5 +157,5 @@ export async function resolveRequestRoot(request) {
     }
   }
 
-  return { root, constraint, target: targetAbsolute };
+  return { root, constraint, target: targetAbsolute, source };
 }
