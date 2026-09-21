@@ -1,15 +1,56 @@
 # codeq
 
 `codeq` combines FFF file/content search and CodeGraph exploration behind one
-local CLI and an automatically managed per-user daemon.
+local CLI, a stdio MCP server, and an automatically managed per-user daemon.
 
 ```bash
 codeq find router
 codeq grep "TODO" --glob "**/*.ts" --context 2
 codeq graph "how does authentication reach the session store?"
+codeq mcp
 ```
 
 Node.js `>=22.5 <25` is required.
+
+## Cursor MCP
+
+Add this to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
+
+```json
+{
+  "mcpServers": {
+    "codeq": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@zj669/codeq", "mcp"],
+      "env": {
+        "CODEQ_CWD": "${workspaceFolder}"
+      }
+    }
+  }
+}
+```
+
+After a global install (`npm install -g @zj669/codeq`), this is equivalent:
+
+```json
+{
+  "mcpServers": {
+    "codeq": {
+      "type": "stdio",
+      "command": "codeq",
+      "args": ["mcp"],
+      "env": {
+        "CODEQ_CWD": "${workspaceFolder}"
+      }
+    }
+  }
+}
+```
+
+The MCP tools are `find`, `grep`, and `graph`. They reuse the same user-level
+daemon as the CLI, index a root automatically on first use, and accept `path` /
+`root` to switch repositories. A call always searches exactly one root.
 
 ## Install, update, and uninstall
 
@@ -40,7 +81,7 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/ma
 To pin the current GitHub release instead:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.1.0.tar.gz
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.0.tar.gz
 ```
 
 ## Commands
@@ -49,12 +90,13 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.
 codeq [--root PATH] [--json] find  <query>   [--path PATH] [--limit N]
 codeq [--root PATH] [--json] grep  <pattern> [--path PATH] [--glob GLOB] [--context N]
 codeq [--root PATH] [--json] graph <query>   [--path PATH]
+codeq mcp
 ```
 
 There are no daemon-management or indexing commands. The first query starts the
-daemon and automatically indexes its selected root. `--path` and `--root` can
-route one request to another repository, but a request always searches exactly
-one root.
+daemon and automatically indexes its selected root. `--path` and `--root` (or
+the MCP `path` / `root` arguments) can route one request to another repository,
+but a request always searches exactly one root.
 
 The root is the deepest Git worktree containing the target. This means a linked
 Git worktree gets its own indexes and is always read from its own checkout. For
