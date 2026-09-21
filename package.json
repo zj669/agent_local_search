@@ -1,0 +1,27 @@
+{
+  "name": "@codeq/cli",
+  "version": "0.1.0",
+  "description": "Local file, text, and code-graph search from one CLI",
+  "type": "module",
+  "bin": {
+    "codeq": "./bin/codeq.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "scripts"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/patch-codegraph.mjs",
+    "verify:patch": "node scripts/patch-codegraph.mjs --check",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.5 <25"
+  },
+  "dependencies": {
+    "@colbymchenry/codegraph": "1.6.0",
+    "@ff-labs/fff-node": "0.11.0"
+  },
+  "license": "MIT"
+}
