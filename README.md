@@ -14,21 +14,8 @@ Node.js `>=22.5 <25` is required.
 
 ## Cursor MCP
 
-Add this to `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
-
-```json
-{
-  "mcpServers": {
-    "codeq": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@zj669/codeq", "mcp"]
-    }
-  }
-}
-```
-
-After a global install (`npm install -g @zj669/codeq`), this is equivalent:
+After a global install (`npm install -g @zj669/codeq`), add this to
+`.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (global):
 
 ```json
 {
@@ -36,7 +23,32 @@ After a global install (`npm install -g @zj669/codeq`), this is equivalent:
     "codeq": {
       "type": "stdio",
       "command": "codeq",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "cwd": "${workspaceFolder}"
+    }
+  }
+}
+```
+
+`cwd` is Cursor's stdio **spawn working directory** for the MCP process — the
+same `process.cwd()` the CLI reads from your shell. It is not a `codeq`
+argument and not an environment variable. Do not set `CODEQ_CWD`.
+
+If the client sends `roots/list`, that session workspace is used; otherwise
+codeq uses this spawn cwd. Git then promotes the directory to the deepest
+worktree, the same way the CLI does. Spawned from `$HOME` or `/` with no
+workspace path, searches refuse those roots.
+
+Without a global install, `npx` also works if you still set spawn `cwd`:
+
+```json
+{
+  "mcpServers": {
+    "codeq": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@zj669/codeq", "mcp"],
+      "cwd": "${workspaceFolder}"
     }
   }
 }
@@ -54,10 +66,8 @@ summary plus paths; pass `detail: "full"` for complete match text or the full
 graph dump.
 
 Workspace discovery matches the FFF plugin in pi (`@ff-labs/pi-fff`): no
-project-path env var. The server uses the MCP client's session workspace
-(`roots/list`) when the client provides it, otherwise `process.cwd()`. The
-daemon then promotes that directory to the deepest Git worktree, the same way
-the CLI does.
+project-path env var. Prefer `roots/list` when the client provides it, else
+the spawn `process.cwd()`.
 
 ## Install, update, and uninstall
 
@@ -88,7 +98,7 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/ma
 To pin the current GitHub release instead:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.1.tar.gz
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.2.tar.gz
 ```
 
 ## Commands
