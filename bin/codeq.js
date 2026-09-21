@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync } from "node:fs";
-import { connect } from "node:net";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { daemonPaths } from "../src/paths.js";
+import { queryDaemon } from "../src/client.js";
+import { runMcpServer } from "../src/mcp.js";
 
 const USAGE = `Usage:
   codeq [--root PATH] [--json] find  <query>   [--path PATH] [--limit N]
   codeq [--root PATH] [--json] grep  <pattern> [--path PATH] [--glob GLOB] [--context N]
-  codeq [--root PATH] [--json] graph <query>   [--path PATH]`;
+  codeq [--root PATH] [--json] graph <query>   [--path PATH]
+  codeq mcp`;
+
+const MCP_USAGE = `Usage:
+  codeq mcp
+
+Run a stdio MCP server that exposes find, grep, and graph. The server reuses
+the per-user codeq daemon and indexes a root automatically on first use.`;
 
 function fail(message, code = 2) {
   process.stderr.write(`codeq: ${message}\n\n${USAGE}\n`);
@@ -91,45 +94,6 @@ function parseArguments(argv) {
   return options;
 }
 
-function openSocket(socketPath) {
-  return new Promise((resolve, reject) => {
-    const socket = connect(socketPath);
-    socket.once("connect", () => resolve(socket));
-    socket.once("error", reject);
-  });
-}
-
-async function connectDaemon() {
-  const paths = daemonPaths();
-  try {
-    return await openSocket(paths.socket);
-  } catch {}
-
-  mkdirSync(dirname(paths.log), { recursive: true });
-  const logFd = openSync(paths.log, "a");
-  const script = fileURLToPath(new URL("../src/daemon.js", import.meta.url));
-  const child = spawn(process.execPath, [script], {
-    detached: true,
-    stdio: ["ignore", logFd, logFd],
-    env: process.env,
-  });
-  child.unref();
-  closeSync(logFd);
-
-  let lastError;
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    try {
-      return await openSocket(paths.socket);
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw new Error(
-    `daemon did not start: ${lastError?.message || `see ${paths.log}`}`,
-  );
-}
-
 function printStatus(result) {
   process.stderr.write(`[${result.status}] root ${result.root}\n`);
   if (result.warning) process.stderr.write(`warning: ${result.warning}\n`);
@@ -159,48 +123,24 @@ function printHuman(command, result) {
   process.stdout.write(`${result.result.trimEnd()}\n`);
 }
 
-async function main() {
-  const request = parseArguments(process.argv.slice(2));
+async function runCli(argv) {
+  const request = parseArguments(argv);
   const { json, ...wireRequest } = request;
-  const socket = await connectDaemon();
-  socket.setEncoding("utf8");
-  let buffer = "";
-
-  const completion = new Promise((resolve, reject) => {
-    socket.on("data", (chunk) => {
-      buffer += chunk;
-      for (;;) {
-        const newline = buffer.indexOf("\n");
-        if (newline < 0) break;
-        const line = buffer.slice(0, newline);
-        buffer = buffer.slice(newline + 1);
-        if (!line) continue;
-        const message = JSON.parse(line);
-        if (message.type === "progress") {
-          const detail =
-            message.message ||
-            `${message.phase}${message.total ? ` ${message.current}/${message.total}` : ""}`;
-          process.stderr.write(`[indexing] ${detail}\n`);
-        } else if (message.type === "error") {
-          reject(new Error(message.error));
-        } else if (message.type === "result") {
-          resolve(message.result);
-        }
-      }
-    });
-    socket.on("error", reject);
-    socket.on("end", () => {
-      if (buffer.trim()) reject(new Error("daemon returned an incomplete response"));
-    });
-  });
-
+  const controller = new AbortController();
   const cancel = () => {
-    socket.destroy();
+    controller.abort();
     process.exit(130);
   };
   process.once("SIGINT", cancel);
-  socket.write(`${JSON.stringify(wireRequest)}\n`);
-  const result = await completion;
+  const result = await queryDaemon(wireRequest, {
+    signal: controller.signal,
+    onProgress: (message) => {
+      const detail =
+        message.message ||
+        `${message.phase}${message.total ? ` ${message.current}/${message.total}` : ""}`;
+      process.stderr.write(`[indexing] ${detail}\n`);
+    },
+  });
   process.removeListener("SIGINT", cancel);
   if (json) {
     process.stdout.write(
@@ -209,6 +149,21 @@ async function main() {
   } else {
     printHuman(request.command, result);
   }
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  if (argv[0] === "mcp") {
+    const rest = argv.slice(1);
+    if (rest.includes("--help") || rest.includes("-h")) {
+      process.stdout.write(`${MCP_USAGE}\n`);
+      process.exit(0);
+    }
+    if (rest.length > 0) fail("mcp does not take additional arguments");
+    await runMcpServer();
+    return;
+  }
+  await runCli(argv);
 }
 
 main().catch((error) => {
