@@ -270,7 +270,12 @@ export class RootContext {
             if (!pending) continue;
             this.graphPending.delete(message.id);
             if (message.error) pending.reject(new Error(message.error));
-            else pending.resolve(message.result);
+            else {
+              pending.resolve({
+                text: message.result,
+                symbols: Array.isArray(message.symbols) ? message.symbols : [],
+              });
+            }
           }
         }
       });
@@ -375,14 +380,17 @@ export class RootContext {
       ? `${query} path:${options.constraint.replace(/\/$/, "")}`
       : query;
     const id = ++this.graphSequence;
-    const result = await new Promise((resolve, reject) => {
+    const payload = await new Promise((resolve, reject) => {
       this.graphPending.set(id, { resolve, reject });
       this.graphProcess.stdin.write(`${JSON.stringify({ id, query: scoped })}\n`);
     });
+    const text = typeof payload === "string" ? payload : payload.text;
+    const symbols = typeof payload === "string" ? [] : payload.symbols || [];
     return {
       ...this.metadata(),
       query,
-      result,
+      result: text,
+      symbols,
     };
   }
 

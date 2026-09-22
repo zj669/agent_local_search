@@ -62,6 +62,26 @@ const graphResult = {
   warning: null,
   query: "how does createSession work",
   result: exploreDump(),
+  symbols: [
+    {
+      name: "createSession",
+      kind: "function",
+      path: "src/session.ts",
+      startLine: 12,
+      endLine: 40,
+      callees: [
+        { name: "send", path: "src/app.ts", line: 252, endLine: 270 },
+        { name: "send", path: "src/app.ts", line: 252, endLine: 270 },
+        {
+          name: "ready",
+          path: "src/session.ts",
+          line: 4,
+          endLine: 4,
+          text: "function ready() { return true; }",
+        },
+      ],
+    },
+  ],
 };
 
 test("freshness line leads every MCP reply", () => {
@@ -161,29 +181,36 @@ test("graph layer 0 is a map: no source, no engine self-description", () => {
 
   assert.match(text, /graph "how does createSession work" — 43 symbols in 2 files/);
   assert.match(text, /exact hit on createSession/);
-  assert.match(text, /hit: createSession — src\/session\.ts:12/);
-  assert.match(text, /open these files \(2\)/);
-  assert.match(
-    text,
-    /1\. src\/session\.ts:12 — createSession\(function\), TOOLS\(constant\), send \+5 · relevant lines 1-20/,
-  );
-  assert.match(text, /2\. src\/app\.ts — send, positiveInteger, jsonRpcError \+23 · relevant lines 252-271/);
+  assert.match(text, /hit: createSession — src\/session\.ts:12-40/);
+  assert.match(text, /open these files \(1\)/);
+  assert.match(text, /1\. src\/session\.ts:12-40 — createSession\(function\)/);
+  assert.equal(text.includes("relevant lines"), false);
+  assert.equal(text.includes("const line0"), false);
+  assert.match(text, /calls \(direct\)/);
+  assert.match(text, /- send \(src\/app\.ts:252\)/);
+  assert.equal(text.split("- send (").length - 1, 1);
+  assert.equal(/return status or/.test(text), false);
+  assert.match(text, /- ready \(src\/session\.ts:4\) function ready\(\) \{ return true; \}/);
   assert.match(text, /no source in this map\. detail:"full" returns source for these 2 files/);
   assert.ok(text.length <= 1_500, `layer 0 is ${text.length} chars`);
 
   const payload = formatted.structuredContent;
   assert.equal(payload.sourceIncluded, false);
-  assert.deepEqual(payload.paths, ["src/session.ts", "src/app.ts"]);
+  assert.deepEqual(payload.paths, ["src/session.ts"]);
   assert.deepEqual(payload.exactHits, [
     { symbol: "createSession", path: "src/session.ts", line: 12 },
   ]);
-  assert.deepEqual(payload.files[1].renderedLines, [252, 271]);
-  assert.equal(payload.files[0].symbolCount, 9);
+  assert.deepEqual(payload.files[0].renderedLines, [12, 40]);
+  assert.equal(payload.files[0].symbolCount, 1);
+  assert.deepEqual(
+    payload.callees.map((callee) => callee.name),
+    ["send", "ready"],
+  );
 });
 
 test("graph paths are the files to open; pointers and folded names are alsoRanked", () => {
   const payload = formatMcpToolResult("graph", graphResult).structuredContent;
-  assert.deepEqual(payload.paths, ["src/session.ts", "src/app.ts"]);
+  assert.deepEqual(payload.paths, ["src/session.ts"]);
   assert.equal(payload.paths.includes("src/other.ts"), false);
   assert.equal(payload.paths.includes("test/session.test.js"), false);
   assert.deepEqual(payload.alsoRanked, ["TOOLS", "src/other.ts"]);
@@ -300,22 +327,31 @@ test("graph opens the query identifier's file first, not the engine's order", ()
     ...graphResult,
     query: "how does format_chat_details work",
     result: shortTokenDump(),
+    symbols: [
+      {
+        name: "format_chat_details",
+        kind: "function",
+        path: "src/leagent/generator.py",
+        startLine: 317,
+        endLine: 340,
+        callees: [
+          { name: "get_scores", path: "src/leagent/retrieval/bm25.py", line: 4, endLine: 9 },
+        ],
+      },
+    ],
   });
   const text = formatted.text;
   const payload = formatted.structuredContent;
 
-  assert.match(text, /hit: format_chat_details — src\/leagent\/generator\.py:317/);
+  assert.match(text, /hit: format_chat_details — src\/leagent\/generator\.py:317-340/);
   assert.match(
     text,
-    /open these files \(2\)\n1\. src\/leagent\/generator\.py:317 — format_chat_details\(function\)/,
+    /open these files \(1\)\n1\. src\/leagent\/generator\.py:317-340 — format_chat_details\(function\)/,
   );
-  // A caller the blast radius ties to the identifier earns second place; files
-  // that only matched format, chat or get do not.
-  assert.equal(payload.paths[1], "src/leagent/agent/global_agent.py");
-  assert.deepEqual(payload.paths.slice(0, 3), [
-    "src/leagent/generator.py",
-    "src/leagent/agent/global_agent.py",
-  ]);
+  assert.equal(text.includes("relevant lines"), false);
+  assert.match(text, /- get_scores \(src\/leagent\/retrieval\/bm25\.py:4\)/);
+  assert.equal(payload.paths[0], "src/leagent/generator.py");
+  assert.equal(payload.paths.includes("src/leagent/agent/global_agent.py"), false);
   assert.match(
     text,
     /also ranked, on shorter tokens than format_chat_details: src\/leagent\/openai\.py, src\/leagent\/retrieval\/bm25\.py, src\/leagent\/chat\/field_constraints\.py — detail:"full" expands them\./,
@@ -335,12 +371,22 @@ test("graph opens a definition site the engine named but never rendered", () => 
     ...graphResult,
     query: "how does format_chat_details work",
     result: shortTokenDump(false),
+    symbols: [
+      {
+        name: "format_chat_details",
+        kind: "function",
+        path: "src/leagent/generator.py",
+        startLine: 317,
+        endLine: 340,
+        callees: [],
+      },
+    ],
   });
   assert.match(
     formatted.text,
-    /open these files \(2\)\n1\. src\/leagent\/generator\.py:317 — format_chat_details/,
+    /open these files \(1\)\n1\. src\/leagent\/generator\.py:317-340 — format_chat_details\(function\)/,
   );
-  assert.equal(formatted.structuredContent.files[0].renderedLines, null);
+  assert.deepEqual(formatted.structuredContent.files[0].renderedLines, [317, 340]);
   assert.equal(formatted.structuredContent.paths[0], "src/leagent/generator.py");
 });
 
@@ -368,10 +414,112 @@ test("graph says when one query stacked several topics", () => {
   });
   assert.match(
     formatted.text,
-    /this query names 3 topics \(regression, benchmark, replay\), so the map covers all of them — call one identifier per query for a narrow map\./,
+    /this query names 3 topics \(regression, benchmark, replay\), so this map is wider than one symbol\./,
   );
+  assert.equal(formatted.text.includes("one identifier per query"), false);
+  assert.equal(formatted.text.includes("call one"), false);
   const single = formatMcpToolResult("graph", graphResult);
   assert.equal(single.text.includes("topics"), false);
+});
+
+test("graph caps the callee list and keeps multi-line bodies out of layer 0", () => {
+  const callees = Array.from({ length: 9 }, (_, i) => ({
+    name: `step${i}`,
+    path: `src/pkg/step${i}.py`,
+    line: i + 1,
+    endLine: i + 4,
+    text: "return step",
+  }));
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    symbols: [
+      {
+        name: "createSession",
+        kind: "function",
+        path: "src/session.ts",
+        startLine: 12,
+        endLine: 40,
+        callees,
+      },
+    ],
+  });
+  assert.match(formatted.text, /- step0 \(src\/pkg\/step0\.py:1\)/);
+  assert.match(formatted.text, /- step7 \(src\/pkg\/step7\.py:8\)/);
+  assert.equal(formatted.text.includes("step8"), false);
+  assert.equal(formatted.text.includes("return step"), false);
+  assert.match(formatted.text, /\+1 more callees — detail:"full"/);
+  const full = formatMcpToolResult(
+    "graph",
+    {
+      ...graphResult,
+      symbols: [
+        {
+          name: "createSession",
+          kind: "function",
+          path: "src/session.ts",
+          startLine: 12,
+          endLine: 40,
+          callees,
+        },
+      ],
+    },
+    { detail: "full" },
+  );
+  assert.equal(full.text.startsWith(formatted.text), true);
+  assert.match(full.text, /more callees\n- step8 \(src\/pkg\/step8\.py:9\)/);
+});
+
+test("grep groups hits by file and prefers definitions and assignments", () => {
+  const hits = [
+    { path: "src/pkg/view.py", line: 2, column: 12, text: "    return status" },
+    { path: "src/pkg/view.py", line: 4, column: 12, text: "    print(status)" },
+    { path: "src/pkg/widget.py", line: 8, column: 16, text: "    color = paint(status)" },
+    { path: "src/pkg/widget.py", line: 3, column: 1, text: 'STATUS = "idle"' },
+    { path: "src/pkg/widget.py", line: 14, column: 5, text: "    status = color" },
+    { path: "src/pkg/widget.py", line: 10, column: 20, text: "def render_widget(status, items):" },
+    { path: "src/pkg/view.py", line: 6, column: 1, text: 'status = "shown"' },
+  ];
+  const formatted = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "status",
+    mode: "plain",
+    shown: hits.length,
+    moreRemain: false,
+    results: hits,
+  });
+  const text = formatted.text;
+  assert.match(text, /^src\/pkg\/widget\.py$/m);
+  assert.match(text, /^src\/pkg\/widget\.py:3:1 STATUS = "idle"$/m);
+  assert.match(text, /^src\/pkg\/widget\.py:14:5 status = color$/m);
+  assert.match(text, /^src\/pkg\/view\.py:6:1 status = "shown"$/m);
+  assert.equal(text.includes("return status"), false);
+  assert.equal(text.includes("paint(status)"), false);
+  assert.match(text, /\+4 more hits in these files: src\/pkg\/view\.py, src\/pkg\/widget\.py — detail:"full"/);
+  const widget = text.indexOf("src/pkg/widget.py:3:1");
+  const view = text.indexOf("src/pkg/view.py:6:1");
+  assert.ok(widget > 0 && widget < view, text);
+
+  const full = formatMcpToolResult(
+    "grep",
+    {
+      status: "ready",
+      root: "/repo",
+      pattern: "status",
+      mode: "plain",
+      shown: hits.length,
+      moreRemain: false,
+      results: hits.map((hit) => ({
+        ...hit,
+        contextBefore: ["before"],
+        contextAfter: ["after"],
+      })),
+    },
+    { detail: "full" },
+  );
+  assert.match(full.text, /return status/);
+  assert.match(full.text, /src\/pkg\/view\.py-1- before/);
+  assert.equal(full.text.includes("more hits in these files"), false);
 });
 
 test("grep is exact by default and never labels itself fuzzy", () => {

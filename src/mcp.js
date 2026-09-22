@@ -22,7 +22,7 @@ const ROOTS_LIST_TIMEOUT_MS = 5_000;
 const PATH_PROPERTY = {
   type: "string",
   description:
-    "Narrow this one call inside the selected repository: a directory (src/, mr_review_service, mr_review_service/profiles) or a single file (src/leagent/chat/policy_selector.py). This is the only way to scope a search, and it never creates or switches an index: every path in a repository reuses that repository's one index. A relative path is joined to root when root is passed, otherwise to the session cwd; absolute, ~/, and ../ paths that leave the workspace switch to that repository, but prefer root for that. A path that does not exist is an error that names the absolute path tried, not a silent search of the whole repository. Each call uses exactly one root.",
+    "Narrow this one call inside the selected repository: a directory (src/, profiles/app) or a single file (src/pkg/foo.py). This is the only way to scope a search, and it never creates or switches an index: every path in a repository reuses that repository's one index. A relative path is joined to root when root is passed, otherwise to the session cwd; absolute, ~/, and ../ paths that leave the workspace switch to that repository, but prefer root for that. A path that does not exist is an error that names the absolute path tried, not a silent search of the whole repository. Each call uses exactly one root.",
 };
 
 const ROOT_PROPERTY = {
@@ -50,7 +50,7 @@ const DETAIL_PROPERTY = {
   type: "string",
   enum: ["summary", "full"],
   description:
-    'summary (default) is layer 0: the resolved root, the hit symbols, the files to open next with their relevant line ranges, and what depends on them — no source code, because opening those files yourself is cheaper than us forwarding them. full is layer 1: the whole layer 0 map repeated verbatim, then source (graph) or full match text and metadata (grep/find). Pass full only when you need to quote the code; when a reply says it omitted something, it also says how to get just that part.',
+    'summary (default) is layer 0: the resolved root, the hit symbol\'s own line span (not the whole file), its direct callees, and for grep the definition and assignment lines grouped by file — no source code, because opening that span yourself is cheaper than us forwarding it. full is layer 1: the whole layer 0 map repeated verbatim, then source (graph) or context lines (grep/find). Pass full only when you need to quote the code; when a reply says it omitted something, it also says how to get just that part.',
 };
 
 const FRESHNESS_SCHEMA = {
@@ -80,7 +80,7 @@ const TOOLS = [
         query: {
           type: "string",
           description:
-            "File name or path fragment, matched fuzzily against every indexed path, for example leagent.py, profiles/leagent, profile, or SKILL.md. Dotfiles and dot-directories such as .claude/skills and .cursor/rules are indexed, so look for skills and rules here instead of a native glob tool. Glob syntax is not supported: **/*profile* matches nothing, pass profile instead.",
+            "File name or path fragment, matched fuzzily against every indexed path, for example foo.py, profiles/app, profile, or SKILL.md. Dotfiles and dot-directories such as .claude/skills and .cursor/rules are indexed, so look for skills and rules here instead of a native glob tool. Glob syntax is not supported: **/*profile* matches nothing, pass profile instead.",
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
@@ -193,14 +193,14 @@ const TOOLS = [
     name: "graph",
     title: "Explore the code graph",
     description:
-      "Explore related symbols and files with CodeGraph explore. Returns a map of the code — hit symbols, the files to open next with their relevant line ranges, and the blast radius — to read next, not a written answer, so expect to open the files it names with your own Read. Do not look for a callers tool. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass root to query a different repository and path to narrow inside one. Each call uses exactly one root. The default reply is layer 0 and carries no source code; pass detail full for layer 1, which repeats the map and then adds source with the query's target file first.",
+      "Explore related symbols and files with CodeGraph explore. Returns a map of the code to read next, not a written answer: the query symbol's own span (start–end of that function or class, not the whole file) and its direct callees (name, file, line). Read that span; do not split a pipeline into one graph call per identifier. A query that names several symbols returns one wider map. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass root to query a different repository and path to narrow inside one. Each call uses exactly one root. The default reply is layer 0 and carries no source code; pass detail full for layer 1, which repeats the map and then adds source with the query's target file first.",
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
           description:
-            'Identifiers, or "how does X work" where X is identifiers, for example "GlobalAgent prepare_planner saas_reply_planner" or "how does saas_message build CommandReplyResponse". Identifier-shaped queries match the graph; a multi-paragraph question does not.',
+            'Identifiers, or "how does X work" where X is identifiers, for example "Widget render_widget" or "how does render_widget work". A query that names several identifiers returns one wider map — do not split it into one call per identifier. Identifier-shaped queries match the graph; a multi-paragraph question does not.',
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
@@ -246,6 +246,21 @@ const TOOLS = [
           type: "array",
           description: "Same file list as files[].path: what to open next, nothing else.",
           items: { type: "string" },
+        },
+        callees: {
+          type: "array",
+          description:
+            "Direct callees of the query symbol: name, file, and definition line. A one-line callee may include that single source line as text.",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              path: { type: "string" },
+              line: { type: "integer" },
+              endLine: { type: "integer" },
+              text: { type: "string" },
+            },
+          },
         },
         alsoRanked: { type: "array", items: { type: "string" } },
         omitted: {
