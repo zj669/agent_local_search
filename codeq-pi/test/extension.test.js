@@ -63,8 +63,8 @@ test("package is a Pi extension named @zj669/codeq-pi", () => {
   const pkg = JSON.parse(readSrc("package.json"));
   const cli = JSON.parse(readSrc("../package.json"));
   assert.equal(pkg.name, "@zj669/codeq-pi");
-  assert.equal(pkg.version, "0.3.7");
-  assert.equal(cli.version, "0.3.7");
+  assert.equal(pkg.version, "0.3.8");
+  assert.equal(cli.version, "0.3.8");
   assert.deepEqual(pkg.pi, { extensions: ["./src/index.ts"] });
   assert.equal(pkg.keywords.includes("pi-package"), true);
   assert.equal(pkg.dependencies["@zj669/codeq"], "file:..");
@@ -153,7 +153,7 @@ test("factory registers grep, find, and graph only, without querying", async () 
     ...pi.tools.flatMap((tool) => tool.promptGuidelines),
     ...pi.tools.map((tool) => JSON.stringify(tool.parameters)),
   ].join("\n");
-  assert.equal(/jev|noul|prod_shortlist/i.test(agentText), false);
+  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|skipped/i.test(agentText), false);
   assert.equal(Boolean(pi.tools[1].parameters.properties.cursor), true);
   assert.equal(Boolean(pi.tools[1].parameters.properties.context), false);
 });
@@ -448,7 +448,7 @@ test("find production shortlist skip and mixed-config grep still match CLI", asy
     ctx,
   );
   assert.equal(called, 0);
-  assert.equal(/jev|noul|prod_shortlist|skipped/i.test(found.content[0].text), false);
+  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|skipped/i.test(found.content[0].text), false);
   const grepped = await byName.grep.execute(
     "2",
     { pattern: "render_widget" },
@@ -457,5 +457,93 @@ test("find production shortlist skip and mixed-config grep still match CLI", asy
     ctx,
   );
   assert.equal(called, 1);
-  assert.equal(/jev|noul|prod_shortlist|skipped/i.test(grepped.content[0].text), false);
+  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|skipped/i.test(grepped.content[0].text), false);
+});
+
+test("graph exact neighborhood skip matches CLI and empty entries are not that skip", async () => {
+  let called = 0;
+  const systemOne = async (payload) => {
+    called += 1;
+    const answers = {};
+    for (const key of Object.keys(payload.questions)) {
+      answers[key] = { type: "noul", noul: 0.1 };
+    }
+    return { answers };
+  };
+  const env = { CODEQ_JEV_KEY: "x" };
+  const { byName } = load({
+    query: async (request) => {
+      if (request.query.includes("missing_widget")) {
+        return {
+          status: "ready",
+          root: "/repos/app",
+          query: request.query,
+          result: "",
+          symbols: [],
+        };
+      }
+      return {
+        status: "ready",
+        root: "/repos/app",
+        query: request.query,
+        result: "",
+        symbols: [
+          {
+            name: "render_widget",
+            kind: "function",
+            path: "src/pkg/foo.py",
+            startLine: 14,
+            endLine: 22,
+            callees: [{ name: "layout", path: "src/pkg/layout.py", line: 1, endLine: 2 }],
+            callers: [{ name: "show", path: "src/pkg/widget.py", line: 25, endLine: 27 }],
+          },
+        ],
+      };
+    },
+    rerank: (name, request, result) =>
+      maybeRerank(name, request, result, { env, systemOne }),
+  });
+  const ctx = { cwd: "/repos/app" };
+  const mapped = await byName.graph.execute(
+    "1",
+    { query: "how does render_widget work" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(called, 0);
+  assert.equal(
+    /jev|noul|prod_shortlist|exact_neighborhood|skipped/i.test(mapped.content[0].text),
+    false,
+  );
+  assert.match(
+    mapped.content[0].text,
+    /graph "how does render_widget work" — exact render_widget/,
+  );
+  assert.match(mapped.content[0].text, /^callers: show src\/pkg\/widget\.py:25$/m);
+  const missed = await byName.graph.execute(
+    "2",
+    { query: "how does missing_widget work" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(called, 0);
+  const missReranked = await maybeRerank(
+    "graph",
+    { query: "how does missing_widget work" },
+    {
+      status: "ready",
+      root: "/repos/app",
+      query: "how does missing_widget work",
+      result: "",
+      symbols: [],
+    },
+    { env, systemOne },
+  );
+  assert.equal(missReranked.jev.skipped, "too_few");
+  assert.equal(
+    /jev|noul|prod_shortlist|exact_neighborhood|skipped/i.test(missed.content[0].text),
+    false,
+  );
 });
