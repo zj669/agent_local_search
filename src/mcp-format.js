@@ -125,8 +125,16 @@ function pinExactFind(results) {
   return [...exact, ...rest];
 }
 
+function orderFindResults(results, preserveOrder) {
+  if (preserveOrder) return results || [];
+  return pinExactFind(results);
+}
+
 function formatFind(result) {
-  const results = pinExactFind(result.results).slice(0, FIND_CAP);
+  const results = orderFindResults(result.results, result.preserveOrder).slice(
+    0,
+    FIND_CAP,
+  );
   const query = result.query ?? "";
   const shown = results.length;
   const matched = result.total ?? shown;

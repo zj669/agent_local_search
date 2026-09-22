@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createCodeqExtension } from "../src/extension.js";
 import { formatMcpToolResult } from "../../src/mcp-format.js";
+import { maybeRerank } from "../../src/jev.js";
 
 const pkgRoot = fileURLToPath(new URL("..", import.meta.url));
 
@@ -60,7 +61,10 @@ function load(options = {}) {
 
 test("package is a Pi extension named @zj669/codeq-pi", () => {
   const pkg = JSON.parse(readSrc("package.json"));
+  const cli = JSON.parse(readSrc("../package.json"));
   assert.equal(pkg.name, "@zj669/codeq-pi");
+  assert.equal(pkg.version, "0.3.6");
+  assert.equal(cli.version, "0.3.6");
   assert.deepEqual(pkg.pi, { extensions: ["./src/index.ts"] });
   assert.equal(pkg.keywords.includes("pi-package"), true);
   assert.equal(pkg.dependencies["@zj669/codeq"], "file:..");
@@ -385,4 +389,73 @@ test("rerank runs before format, matching CLI/MCP", async () => {
     "format:ranked.ts",
   ]);
   assert.equal(result.content[0].text, "ranked.ts");
+});
+
+test("find production shortlist skip and mixed-config grep still match CLI", async () => {
+  let called = 0;
+  const systemOne = async (payload) => {
+    called += 1;
+    const answers = {};
+    for (const key of Object.keys(payload.questions)) {
+      answers[key] = { type: "noul", noul: 0.1 };
+    }
+    return { answers };
+  };
+  const env = { CODEQ_JEV_KEY: "x" };
+  const { byName } = load({
+    query: async (request) => {
+      if (request.command === "find") {
+        return {
+          status: "ready",
+          root: "/repos/app",
+          query: request.query,
+          results: [
+            { path: "src/pkg/foo.py", matchType: "exact" },
+            { path: "src/pkg/other.py", matchType: "fuzzy" },
+          ],
+        };
+      }
+      return {
+        status: "ready",
+        root: "/repos/app",
+        pattern: request.query,
+        mode: "plain",
+        results: [
+          {
+            path: "src/pkg/foo.py",
+            line: 1,
+            column: 1,
+            text: "def render_widget():",
+          },
+          {
+            path: ".github/workflows/ci.yml",
+            line: 4,
+            column: 1,
+            text: "render_widget",
+          },
+        ],
+      };
+    },
+    rerank: (name, request, result) =>
+      maybeRerank(name, request, result, { env, systemOne }),
+  });
+  const ctx = { cwd: "/repos/app" };
+  const found = await byName.find.execute(
+    "1",
+    { query: "foo.py" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(called, 0);
+  assert.equal(/jev|noul|prod_shortlist|skipped/i.test(found.content[0].text), false);
+  const grepped = await byName.grep.execute(
+    "2",
+    { pattern: "render_widget" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(called, 1);
+  assert.equal(/jev|noul|prod_shortlist|skipped/i.test(grepped.content[0].text), false);
 });

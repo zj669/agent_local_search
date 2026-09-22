@@ -517,6 +517,27 @@ test("find pins exact path matches first without Jev", () => {
   ]);
 });
 
+test("find preserveOrder keeps daemon membership and order", () => {
+  const formatted = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "foo",
+    preserveOrder: true,
+    total: 3,
+    results: [
+      { path: "src/pkg/needed.py", matchType: "fuzzy" },
+      { path: ".github/workflows/ci.yml", matchType: "fuzzy" },
+      { path: "src/pkg/foo.py", matchType: "exact" },
+    ],
+  });
+  assert.deepEqual(formatted.structuredContent.paths, [
+    "src/pkg/needed.py",
+    ".github/workflows/ci.yml",
+    "src/pkg/foo.py",
+  ]);
+  assert.equal(/jev|noul|prod_shortlist|skipped/i.test(formatted.text), false);
+});
+
 test("find says glob syntax is not how find works only on a miss without rewrite", () => {
   const miss = formatMcpToolResult("find", {
     status: "ready",

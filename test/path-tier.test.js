@@ -13,6 +13,7 @@ import { isTestPath } from "../src/graph-map.js";
 import {
   applyFindWindow,
   applyGrepWindow,
+  isConfigPath,
   isDocsPath,
   isPreferredHit,
   pathTier,
@@ -97,16 +98,38 @@ test("isTestPath matches foo.test.ts without treating production files as tests"
   assert.equal(isTestPath("src/pkg/foo.spec.ts"), true);
   assert.equal(isTestPath("src/__tests__/foo.ts"), true);
   assert.equal(pathTier("src/skills/encode.ts"), 0);
-  assert.equal(pathTier(".agents/skills/x/SKILL.md"), 2);
-  assert.equal(pathTier("library/src/actions/args/args.test.ts"), 1);
+  assert.equal(pathTier(".agents/skills/x/SKILL.md"), 3);
+  assert.equal(pathTier("library/src/actions/args/args.test.ts"), 2);
 });
 
 test("pathTier demotes docs more than tests, production is 0", () => {
   assert.equal(pathTier("src/pkg/foo.py"), 0);
-  assert.equal(pathTier("test/foo_test.py"), 1);
-  assert.equal(pathTier("src/pkg/foo_test.py"), 1);
-  assert.equal(pathTier("docs/foo.py"), 2);
-  assert.equal(pathTier("test/README.md"), 2);
+  assert.equal(pathTier("test/foo_test.py"), 2);
+  assert.equal(pathTier("src/pkg/foo_test.py"), 2);
+  assert.equal(pathTier("docs/foo.py"), 3);
+  assert.equal(pathTier("docs/guide.md"), 3);
+  assert.equal(pathTier("test/README.md"), 3);
+  assert.equal(pathTier("foo.test.ts"), 2);
+});
+
+test("pathTier demotes config/CI below production and above tests", () => {
+  assert.equal(pathTier(".github/workflows/ci.yml"), 1);
+  assert.equal(pathTier("src/pkg/py.typed"), 1);
+  assert.equal(pathTier(".browserslistrc"), 1);
+  assert.equal(pathTier(".eleventy.js"), 1);
+  assert.equal(pathTier("eslint.config.js"), 1);
+  assert.equal(pathTier("karma.conf.js"), 1);
+  assert.equal(pathTier(".eslintrc"), 1);
+  assert.equal(pathTier(".circleci/config.yml"), 1);
+  assert.equal(pathTier(".gitlab/ci.yml"), 1);
+  assert.equal(isConfigPath(".gitlab/ci.yml"), true);
+
+  assert.equal(pathTier("src/hidden/.eleventy.js"), 0);
+  assert.equal(pathTier("src/config/load.py"), 0);
+  assert.equal(pathTier("pkg/webpack.config.js"), 0);
+  assert.equal(pathTier("src/pkg/foo.py"), 0);
+  assert.equal(isConfigPath("src/hidden/.eleventy.js"), false);
+  assert.equal(isConfigPath("src/config/load.py"), false);
 });
 
 test("find ranking pins exact, then production over docs, without basename pin", () => {
@@ -125,6 +148,24 @@ test("find ranking pins exact, then production over docs, without basename pin",
       "test/widget_test.py",
       "docs/widget.md",
       "README.md",
+    ],
+  );
+
+  const withConfig = rankFindResults([
+    { path: "docs/widget.md", matchType: "fuzzy" },
+    { path: ".github/workflows/ci.yml", matchType: "fuzzy" },
+    { path: "src/pkg/widget.py", matchType: "fuzzy" },
+    { path: "eslint.config.js", matchType: "fuzzy" },
+    { path: "test/widget_test.py", matchType: "fuzzy" },
+  ]);
+  assert.deepEqual(
+    withConfig.map((item) => item.path),
+    [
+      "src/pkg/widget.py",
+      ".github/workflows/ci.yml",
+      "eslint.config.js",
+      "test/widget_test.py",
+      "docs/widget.md",
     ],
   );
 
@@ -162,6 +203,78 @@ test("find window membership pulls production from beyond the visible 16", () =>
   assert.equal(
     applyFindWindow(results, 4)[0].path,
     "src/pkg/needed.py",
+  );
+});
+
+test("find vis16 membership pulls production ahead of a config/CI FFF page", () => {
+  function legacyTier(filePath) {
+    const docs = isDocsPath(filePath) ? 2 : 0;
+    const test = isTestPath(filePath) ? 1 : 0;
+    return Math.max(docs, test);
+  }
+  function legacyRank(items) {
+    const exact = [];
+    const rest = [];
+    for (const item of items) {
+      if (item.matchType === "exact") exact.push(item);
+      else rest.push(item);
+    }
+    const restOrder = rest.map((item, index) => ({ item, index }));
+    restOrder.sort((a, b) => {
+      const tier = legacyTier(a.item.path) - legacyTier(b.item.path);
+      if (tier) return tier;
+      return a.index - b.index;
+    });
+    return [...exact, ...restOrder.map((entry) => entry.item)];
+  }
+
+  const configC = { path: ".github/workflows/ci.yml", matchType: "fuzzy" };
+  const prodB = { path: "src/pkg/needed.py", matchType: "fuzzy" };
+  const configs = [
+    configC,
+    { path: ".browserslistrc", matchType: "fuzzy" },
+    { path: "src/pkg/py.typed", matchType: "fuzzy" },
+    { path: ".eleventy.js", matchType: "fuzzy" },
+    { path: "eslint.config.js", matchType: "fuzzy" },
+    { path: ".eslintrc", matchType: "fuzzy" },
+    { path: ".wallaby.js", matchType: "fuzzy" },
+    { path: "karma.conf.js", matchType: "fuzzy" },
+    ...Array.from({ length: 8 }, (_, i) => ({
+      path: `.github/workflows/job${i}.yml`,
+      matchType: "fuzzy",
+    })),
+  ];
+  assert.equal(configs.length, 16);
+  const filler = Array.from({ length: 31 }, (_, i) => ({
+    path: `docs/note${i}.md`,
+    matchType: "fuzzy",
+  }));
+  const window = [...configs, prodB, ...filler];
+  assert.equal(window.length, 48);
+
+  const legacyVisible = legacyRank(window).slice(0, 16);
+  assert.equal(
+    legacyVisible.some((item) => item.path === configC.path),
+    true,
+  );
+  assert.equal(
+    legacyVisible.some((item) => item.path === prodB.path),
+    false,
+  );
+
+  const visible = applyFindWindow(window);
+  assert.equal(visible.length, 16);
+  assert.equal(
+    visible.some((item) => item.path === prodB.path),
+    true,
+  );
+  assert.equal(visible[0].path, prodB.path);
+  assert.equal(
+    rankFindResults(window).every(
+      (item, index, list) =>
+        index === 0 || pathTier(list[index - 1].path) <= pathTier(item.path),
+    ),
+    true,
   );
 });
 

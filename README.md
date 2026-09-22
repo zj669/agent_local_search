@@ -5,7 +5,7 @@ server, and a per-user daemon. Three tools only — not a fourth. Navigation, no
 Read: replies are bounded locations to open next.
 
 ```bash
-npm i -g @zj669/codeq@0.3.5
+npm i -g @zj669/codeq@0.3.6
 ```
 
 Needs **Node 22.5–24** (not 26). **Do not use `npx`** — npx steals stdin and
