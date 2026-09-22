@@ -1,4 +1,4 @@
-export const GREP_CURSOR_VERSION = 2;
+export const GREP_CURSOR_VERSION = 3;
 
 export const GREP_CURSOR_ERROR =
   "grep cursor is not valid for this search. It is opaque and bound to the same root, pattern, glob, path, regex, and fuzzy as the call that issued it. Pass that cursor back unchanged. A mismatch or a stale cursor is an error, not page 1.";

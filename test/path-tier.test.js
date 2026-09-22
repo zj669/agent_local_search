@@ -9,6 +9,7 @@ import {
   RANK_WINDOW,
   pageLimit,
 } from "../src/limits.js";
+import { isTestPath } from "../src/graph-map.js";
 import {
   applyFindWindow,
   applyGrepWindow,
@@ -18,6 +19,34 @@ import {
   rankFindResults,
   rankGrepHits,
 } from "../src/path-tier.js";
+
+function dumpFileRank(hits, pattern) {
+  const groups = [];
+  const index = new Map();
+  for (const hit of hits || []) {
+    if (!index.has(hit.path)) {
+      index.set(hit.path, groups.length);
+      groups.push({ path: hit.path, hits: [] });
+    }
+    groups[index.get(hit.path)].hits.push(hit);
+  }
+  groups.sort((a, b) => pathTier(a.path) - pathTier(b.path));
+  const ordered = [];
+  for (const group of groups) {
+    const preferred = group.hits
+      .filter((hit) => isPreferredHit(hit, pattern))
+      .sort((a, b) => a.line - b.line);
+    const rest = group.hits
+      .filter((hit) => !isPreferredHit(hit, pattern))
+      .sort((a, b) => a.line - b.line);
+    ordered.push(...preferred, ...rest);
+  }
+  return ordered;
+}
+
+function hit(path, line, text = "TOKEN") {
+  return { path, line, column: 1, text };
+}
 
 test("visible caps stay 16 and the rank window is 48", () => {
   assert.equal(RANK_WINDOW, 48);
@@ -52,6 +81,24 @@ test("isDocsPath matches doc segments and README names", () => {
   assert.equal(isDocsPath("src/pkg/foo.py"), false);
   assert.equal(isDocsPath("src/documentation.ts"), false);
   assert.equal(isDocsPath("src/examples.ts"), false);
+  assert.equal(isDocsPath(".agents/skills/x/SKILL.md"), true);
+  assert.equal(isDocsPath(".agents/skills/x/SKILL"), true);
+  assert.equal(isDocsPath("src/skills/encode.ts"), false);
+  assert.equal(isDocsPath("src/skills/x.ts"), false);
+});
+
+test("isTestPath matches foo.test.ts without treating production files as tests", () => {
+  assert.equal(isTestPath("library/src/actions/args/args.test.ts"), true);
+  assert.equal(isTestPath("library/src/actions/args/args.test.js"), true);
+  assert.equal(isTestPath("httpx/_auth.py"), false);
+  assert.equal(isTestPath("tests/foo.py"), true);
+  assert.equal(isTestPath("test/foo.py"), true);
+  assert.equal(isTestPath("src/pkg/foo_test.py"), true);
+  assert.equal(isTestPath("src/pkg/foo.spec.ts"), true);
+  assert.equal(isTestPath("src/__tests__/foo.ts"), true);
+  assert.equal(pathTier("src/skills/encode.ts"), 0);
+  assert.equal(pathTier(".agents/skills/x/SKILL.md"), 2);
+  assert.equal(pathTier("library/src/actions/args/args.test.ts"), 1);
 });
 
 test("pathTier demotes docs more than tests, production is 0", () => {
@@ -189,4 +236,70 @@ test("grep window membership keeps docs in the window and pages ranked 17+", () 
     second.page.every((hit) => hit.path.startsWith("docs/")),
     true,
   );
+});
+
+test("same-tier grep round-robin pulls a later production file into vis16", () => {
+  const hits = [
+    ...Array.from({ length: 16 }, (_, i) => hit("src/pkg/crowded.py", i + 1)),
+    hit("src/pkg/needed.py", 4, "def TOKEN():"),
+    ...Array.from({ length: 31 }, (_, i) => hit(`src/pkg/other${i}.py`, 1)),
+  ];
+  assert.equal(hits.length, 48);
+  const dumped = dumpFileRank(hits, "TOKEN");
+  assert.equal(
+    dumped.slice(0, 16).some((item) => item.path === "src/pkg/needed.py"),
+    false,
+  );
+  const first = applyGrepWindow(hits, "TOKEN");
+  assert.equal(first.ranked.length, 48);
+  assert.equal(first.page.length, 16);
+  assert.equal(
+    first.page.some((item) => item.path === "src/pkg/needed.py"),
+    true,
+  );
+  assert.equal(first.page[0].path, "src/pkg/crowded.py");
+  assert.equal(first.page[1].path, "src/pkg/needed.py");
+  assert.equal(
+    first.page.filter((item) => item.path === "src/pkg/crowded.py").length,
+    1,
+  );
+  assert.deepEqual(rankGrepHits(first.page, "TOKEN"), first.page);
+
+  const second = applyGrepWindow(hits, "TOKEN", undefined, 16);
+  assert.deepEqual(second.page, first.ranked.slice(16, 32));
+  assert.notDeepEqual(
+    second.page.map((item) => `${item.path}:${item.line}`),
+    hits.slice(16, 32).map((item) => `${item.path}:${item.line}`),
+  );
+});
+
+test("grep does not promote test files before a same-window production file is exhausted", () => {
+  const prod = Array.from({ length: 9 }, (_, i) =>
+    hit("src/pkg/impl.py", i + 1, i === 0 ? "def TOKEN():" : "TOKEN"),
+  );
+  const tests = Array.from({ length: 20 }, (_, i) =>
+    hit("library/src/actions/args/args.test.ts", i + 1),
+  );
+  const docs = Array.from({ length: 19 }, (_, i) =>
+    hit(".agents/skills/x/SKILL.md", i + 1),
+  );
+  const hits = [...tests, ...prod, ...docs];
+  assert.equal(hits.length, 48);
+  const { page, ranked } = applyGrepWindow(hits, "TOKEN");
+  assert.equal(page.length, 16);
+  assert.deepEqual(
+    page.slice(0, 9).map((item) => item.path),
+    Array(9).fill("src/pkg/impl.py"),
+  );
+  assert.equal(
+    page.slice(9).every((item) => item.path.endsWith("args.test.ts")),
+    true,
+  );
+  assert.equal(
+    page.some((item) => item.path.includes("SKILL.md")),
+    false,
+  );
+  const firstTest = ranked.findIndex((item) => item.path.endsWith("args.test.ts"));
+  const lastProd = ranked.map((item) => item.path).lastIndexOf("src/pkg/impl.py");
+  assert.ok(firstTest > lastProd);
 });

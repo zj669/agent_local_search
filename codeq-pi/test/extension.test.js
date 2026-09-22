@@ -144,6 +144,12 @@ test("factory registers grep, find, and graph only, without querying", async () 
   assert.match(pi.tools[0].promptGuidelines.join("\n"), /not a glob/);
   assert.match(pi.tools[1].promptGuidelines.join("\n"), /literal string/);
   assert.equal(Boolean(pi.tools[1].parameters.properties.regex), true);
+  const agentText = [
+    ...pi.tools.map((tool) => tool.description),
+    ...pi.tools.flatMap((tool) => tool.promptGuidelines),
+    ...pi.tools.map((tool) => JSON.stringify(tool.parameters)),
+  ].join("\n");
+  assert.equal(/jev|noul|prod_shortlist/i.test(agentText), false);
   assert.equal(Boolean(pi.tools[1].parameters.properties.cursor), true);
   assert.equal(Boolean(pi.tools[1].parameters.properties.context), false);
 });
