@@ -141,7 +141,10 @@ function isPreferredHit(hit, pattern) {
   return false;
 }
 
-function partitionGrep(hits, pattern) {
+function partitionGrep(hits, pattern, preserveOrder = false) {
+  if (preserveOrder) {
+    return { shown: hits.slice(0, GREP_SHOW), folded: hits.slice(GREP_SHOW) };
+  }
   const preferred = [];
   const rest = [];
   for (const hit of hits) {
@@ -285,6 +288,19 @@ function formatFind(result, full) {
   };
 }
 
+function applyOrder(items, order, keyOf) {
+  if (!Array.isArray(order) || order.length === 0) return items;
+  const remaining = [...items];
+  const out = [];
+  for (const key of order) {
+    const index = remaining.findIndex((item) => keyOf(item) === key);
+    if (index < 0) continue;
+    out.push(remaining.splice(index, 1)[0]);
+  }
+  out.push(...remaining);
+  return out;
+}
+
 function formatGrep(result, full) {
   const hits = result.results || [];
   const pattern = result.pattern ?? "";
@@ -292,6 +308,7 @@ function formatGrep(result, full) {
   const fuzzy = mode === "fuzzy";
   const shown = result.shown ?? hits.length;
   const moreRemain = Boolean(result.moreRemain);
+  const preserveOrder = Boolean(result.preserveOrder);
   const label = mode === "regex" ? "regex" : "exact";
   const lines = [];
 
@@ -313,11 +330,15 @@ function formatGrep(result, full) {
     );
   }
 
-  const partition = partitionGrep(hits, pattern);
+  const partition = partitionGrep(hits, pattern, preserveOrder);
   const display = full ? hits : partition.shown;
   if (display.length > 0) {
     lines.push("");
-    appendGroupedHits(lines, full ? orderGrepFull(hits, pattern) : display, full);
+    appendGroupedHits(
+      lines,
+      full && !preserveOrder ? orderGrepFull(hits, pattern) : display,
+      full,
+    );
   }
   if (!full && partition.folded.length > 0) {
     lines.push("", foldHitsLine(partition.folded));
@@ -629,6 +650,7 @@ function formatGraph(result, full) {
   const identifiers = queryIdentifiers(result.query);
   const hits = exactHits(dump, identifiers);
   const ranked = rankFiles(dump, hits, identifiers);
+  ranked.files = applyOrder(ranked.files, result.fileOrder, (file) => file.path);
   // The budget is spent by dropping whole file entries, never by cutting
   // characters: a half-written path is worse than an honest "+N more files".
   let fileCap = MAP_FILES;

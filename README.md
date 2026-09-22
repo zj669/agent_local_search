@@ -158,6 +158,15 @@ CLI human output prints the same layer 0 map on stdout with the status line on
 stderr. `--json` is unaffected by layers: it stays the complete daemon result
 and is the stable anchor for scripts.
 
+Optional Jev rerank sits **between the engine page and the map wrapper**. It
+runs when `CODEQ_JEV_KEY` is set on the MCP server `env` or the CLI process.
+Optional `CODEQ_JEV_URL` (API root) and `CODEQ_JEV_MODEL` select the endpoint
+and model; omit them to use the SDK's own defaults. One HTTP call ranks the
+current page with Noul (2s timeout, no retries); the candidate set is unchanged
+(no deletes). No key, timeout, or 4xx/5xx **skips** rerank and prints today's
+map. The reply text never names Jev. `--json` is not reranked. There is no
+fourth MCP tool.
+
 Every reply also names the resolved absolute root and which input selected it,
 so a call that landed in the wrong repository is visible without re-deriving
 the routing:
@@ -205,7 +214,7 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/ma
 To pin the current GitHub release instead:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.9.tar.gz
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.11.tar.gz
 ```
 
 ## Commands

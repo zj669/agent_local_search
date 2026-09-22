@@ -7,6 +7,7 @@ import {
   MCP_INSTRUCTIONS,
 } from "./mcp-format.js";
 import { isUnusableWorkspace } from "./paths.js";
+import { maybeRerank } from "./jev.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -473,6 +474,7 @@ function jsonRpcError(id, code, message) {
 export function createMcpServer({
   query = queryDaemon,
   cwd: fallbackCwd,
+  rerank = maybeRerank,
 } = {}) {
   const spawnCwd = defaultCwd(fallbackCwd);
   let workspaceCwd = isUnusableWorkspace(spawnCwd) ? null : spawnCwd;
@@ -570,7 +572,8 @@ export function createMcpServer({
         );
       },
     });
-    const formatted = formatMcpToolResult(name, result, {
+    const ranked = await rerank(name, request, result);
+    const formatted = formatMcpToolResult(name, ranked, {
       detail: args?.detail === "full" ? "full" : "summary",
     });
     return {
