@@ -5,7 +5,7 @@ import {
   rankFiles,
 } from "./graph-map.js";
 
-export const JEV_MODEL = "jev-1.13.0";
+export const JEV_TIMEOUT_MS = 2_000;
 
 const NOUL_TRUE =
   "This hit is useful next-read evidence for answering the request query (a definition or implementation of the named function).";
@@ -17,15 +17,38 @@ const SCORE_LEVELS = [
   "Primary next-read; keep prominent",
 ];
 
-function flagOn(value) {
-  const flag = String(value || "")
-    .trim()
-    .toLowerCase();
-  return flag === "1" || flag === "true" || flag === "on" || flag === "yes";
+function trimEnv(value) {
+  const text = String(value ?? "").trim();
+  return text || null;
+}
+
+export function jevConfig(env = process.env) {
+  return {
+    key: trimEnv(env.CODEQ_JEV_KEY),
+    url: trimEnv(env.CODEQ_JEV_URL),
+    model: trimEnv(env.CODEQ_JEV_MODEL),
+    timeoutMs: JEV_TIMEOUT_MS,
+  };
 }
 
 export function jevEnabled(env = process.env) {
-  return flagOn(env.CODEQ_JEV) && Boolean(env.TYPESAFE_API_KEY);
+  return Boolean(jevConfig(env).key);
+}
+
+export function jevClientOptions(env = process.env) {
+  const config = jevConfig(env);
+  return {
+    apiKey: config.key,
+    ...(config.url ? { baseURL: config.url } : {}),
+    ...(config.model ? { defaultModel: config.model } : {}),
+    logLevel: "off",
+    timeout: config.timeoutMs,
+    retry: {
+      maxRetries: 0,
+      apiTimeoutError: false,
+      apiConnectionError: false,
+    },
+  };
 }
 
 function compact(record) {
@@ -159,25 +182,10 @@ function applyRanking(command, result, candidates, ranked) {
   };
 }
 
-let clientPromise = null;
-
-async function defaultSystemOne(payload) {
+async function defaultSystemOne(payload, env = process.env) {
   const { TypeSafeClient, noul, score } = await import("@typesafe-ai/sdk");
-  if (!clientPromise) {
-    clientPromise = Promise.resolve(
-      new TypeSafeClient({
-        defaultModel: JEV_MODEL,
-        logLevel: "off",
-        timeout: 10_000,
-        retry: {
-          maxRetries: 0,
-          apiTimeoutError: false,
-          apiConnectionError: false,
-        },
-      }),
-    );
-  }
-  const client = await clientPromise;
+  const config = jevConfig(env);
+  const client = new TypeSafeClient(jevClientOptions(env));
   const questions = {};
   for (const [key, question] of Object.entries(payload.questions)) {
     if (question.type === "noul") {
@@ -187,7 +195,7 @@ async function defaultSystemOne(payload) {
     }
   }
   return client.systemOne({
-    model: JEV_MODEL,
+    ...(config.model ? { model: config.model } : {}),
     state: payload.state,
     questions,
   });
@@ -228,15 +236,16 @@ export async function rerank(
   command,
   request,
   result,
-  { systemOne = defaultSystemOne } = {},
+  { systemOne, env = process.env } = {},
 ) {
   const candidates = extractCandidates(command, request, result);
   if (candidates.length <= 1) return result;
+  const call = systemOne || ((payload) => defaultSystemOne(payload, env));
   const payload = {
     state: buildState(command, request, result, candidates),
     questions: questionsFor(candidates),
   };
-  const response = await systemOne(payload);
+  const response = await call(payload);
   if (!response?.answers) return result;
   const ranked = readAnswers(response.answers, candidates);
   const next = applyRanking(command, result, candidates, ranked);

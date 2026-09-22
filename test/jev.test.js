@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { extractCandidates, jevEnabled, maybeRerank, rerank } from "../src/jev.js";
+import {
+  extractCandidates,
+  jevClientOptions,
+  jevConfig,
+  jevEnabled,
+  JEV_TIMEOUT_MS,
+  maybeRerank,
+  rerank,
+} from "../src/jev.js";
 import { formatMcpToolResult } from "../src/mcp-format.js";
 
 const grepResult = {
@@ -50,14 +58,36 @@ function noulFor(state, questions) {
       answers[key] = { type: "score", score: impl ? 1.8 : 0.4 };
     }
   }
-  return { model: "jev-1.13.0", answers, usage: { input_tokens: 1, output_tokens: 1 } };
+  return { model: "configured-model", answers, usage: { input_tokens: 1, output_tokens: 1 } };
 }
 
-test("Jev stays off without CODEQ_JEV and a key", () => {
+test("Jev runs iff a key is configured", () => {
   assert.equal(jevEnabled({}), false);
   assert.equal(jevEnabled({ CODEQ_JEV: "1" }), false);
   assert.equal(jevEnabled({ TYPESAFE_API_KEY: "x" }), false);
-  assert.equal(jevEnabled({ CODEQ_JEV: "1", TYPESAFE_API_KEY: "x" }), true);
+  assert.equal(jevEnabled({ CODEQ_JEV_KEY: "   " }), false);
+  assert.equal(jevEnabled({ CODEQ_JEV_KEY: "x" }), true);
+  const configured = jevConfig({
+    CODEQ_JEV_KEY: "x",
+    CODEQ_JEV_URL: "https://jev.example.test",
+    CODEQ_JEV_MODEL: "configured-model",
+  });
+  assert.equal(configured.url, "https://jev.example.test");
+  assert.equal(configured.model, "configured-model");
+  assert.equal(configured.timeoutMs, 2000);
+  assert.equal(JEV_TIMEOUT_MS, 2000);
+  const options = jevClientOptions({
+    CODEQ_JEV_KEY: "x",
+    CODEQ_JEV_URL: "https://jev.example.test",
+    CODEQ_JEV_MODEL: "configured-model",
+  });
+  assert.equal(options.baseURL, "https://jev.example.test");
+  assert.equal(options.defaultModel, "configured-model");
+  assert.equal(options.timeout, 2000);
+  assert.equal(options.retry.maxRetries, 0);
+  const bare = jevClientOptions({ CODEQ_JEV_KEY: "x" });
+  assert.equal("baseURL" in bare, false);
+  assert.equal("defaultModel" in bare, false);
 });
 
 test("maybeRerank is a no-op when disabled", async () => {
@@ -114,7 +144,7 @@ test("fail-open returns the engine page on Jev errors", async () => {
     { query: "render_widget" },
     grepResult,
     {
-      env: { CODEQ_JEV: "1", TYPESAFE_API_KEY: "x" },
+      env: { CODEQ_JEV_KEY: "x" },
       systemOne: async () => {
         throw new Error("timeout");
       },
