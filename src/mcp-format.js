@@ -11,6 +11,8 @@ const MAP_SYMBOLS = 4;
 const MAP_BLAST = 5;
 const MAP_FOLDED_NAMES = 6;
 const MAP_TOPICS = 3;
+const CALLEE_CAP = 8;
+const GREP_SHOW = 16;
 const MATCH_TEXT_CHARS = 200;
 // Layer 1 has to pay for itself: grep spends it on context lines, so detail
 // "full" without an explicit context still gets some.
@@ -31,7 +33,7 @@ root and path are not interchangeable, but only root selects an index. root is t
 
 Every reply names the resolved absolute root and where it came from: "root <abs> via root argument", "via path argument", or "via cwd (roots/list | spawn cwd | cwd argument | shell cwd)", followed by a parenthesised note when root was not a repository checkout. Read that line. When the root is not the repository you asked about — the usual cause is omitting root while working across two repositories — retry the same call with root set to that repository instead of interpreting the result.
 
-Replies come in two layers. The default is layer 0: that first line, then a short map — hit symbols, the files to open next with their relevant line ranges, and what depends on them. It carries no source code, because opening the named files with your own Read is cheaper than us forwarding them. Pass detail: "full" for layer 1, which repeats the whole layer 0 map and then adds source (graph) or full match metadata (grep/find). When a reply says it omitted something, it says how to get it; take that route instead of guessing.`;
+Replies come in two layers. The default is layer 0: that first line, then a short map. For graph that map is the query symbol's own span (start line–end line of that function or class, not the whole file) plus its direct callees (name, file, line, about 8). Read that span; do not open the whole file, and do not split a pipeline question into one graph call per identifier — a query that names several symbols returns one wider map. For grep, hits are grouped by file with definition and assignment lines first; the rest are folded into a count. It carries no source code, because opening the named span with your own Read is cheaper than us forwarding it. Pass detail: "full" for layer 1, which repeats the whole layer 0 map and then adds source (graph) or full match metadata (grep/find). When a reply says it omitted something, it says how to get it; take that route instead of guessing.`;
 
 export function rootOrigin(result = {}) {
   if (result.rootSource === "root") return "root argument";
@@ -110,6 +112,108 @@ function identifierAt(text, column) {
   while (start > 0 && /[A-Za-z0-9_$]/.test(line[start - 1])) start -= 1;
   while (end < line.length - 1 && /[A-Za-z0-9_$]/.test(line[end + 1])) end += 1;
   return line.slice(start, end + 1);
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isPreferredHit(hit, pattern) {
+  const raw = String(hit.text ?? "");
+  const text = raw.trim();
+  const at = identifierAt(raw, hit.column);
+  const ident = at || (!/[.*+?^${}()|[\]\\]/.test(pattern) ? pattern : null);
+  if (!ident) {
+    return /^(?:export\s+)?(?:async\s+)?(?:def|function|func|fn|class|const|let|var|val|interface|struct|type|enum)\b/.test(
+      text,
+    );
+  }
+  const name = escapeRegExp(ident);
+  if (
+    new RegExp(
+      `(?:^|\\s)(?:async\\s+)?(?:def|function|func|fn|fun|class|interface|struct|trait|type|enum|const|let|var|val)\\s+${name}\\b`,
+    ).test(text)
+  ) {
+    return true;
+  }
+  if (new RegExp(`(?:^|[^\\w$])${name}\\s*=(?!=)`).test(text)) return true;
+  if (new RegExp(`(?:^|[^\\w$])${name}\\s*:(?!:)`).test(text)) return true;
+  return false;
+}
+
+function partitionGrep(hits, pattern) {
+  const preferred = [];
+  const rest = [];
+  for (const hit of hits) {
+    if (isPreferredHit(hit, pattern)) preferred.push(hit);
+    else rest.push(hit);
+  }
+  if (preferred.length === 0) {
+    return { shown: hits.slice(0, GREP_SHOW), folded: hits.slice(GREP_SHOW) };
+  }
+  return {
+    shown: preferred.slice(0, GREP_SHOW),
+    folded: [...preferred.slice(GREP_SHOW), ...rest],
+  };
+}
+
+function appendHit(lines, hit, full) {
+  if (full) {
+    for (let i = 0; i < (hit.contextBefore || []).length; i += 1) {
+      const line = hit.line - hit.contextBefore.length + i;
+      lines.push(`${hit.path}-${line}- ${hit.contextBefore[i]}`);
+    }
+  }
+  lines.push(`${hit.path}:${hit.line}:${hit.column} ${clampText(hit.text)}`);
+  if (full) {
+    for (let i = 0; i < (hit.contextAfter || []).length; i += 1) {
+      lines.push(`${hit.path}-${hit.line + i + 1}- ${hit.contextAfter[i]}`);
+    }
+  }
+}
+
+function appendGroupedHits(lines, hits, full) {
+  const groups = [];
+  const index = new Map();
+  for (const hit of hits) {
+    if (!index.has(hit.path)) {
+      index.set(hit.path, groups.length);
+      groups.push({ path: hit.path, hits: [] });
+    }
+    groups[index.get(hit.path)].hits.push(hit);
+  }
+  const many = groups.length > 1;
+  for (const group of groups) {
+    if (many) lines.push(group.path);
+    for (const hit of group.hits) appendHit(lines, hit, full);
+  }
+}
+
+function orderGrepFull(hits, pattern) {
+  const groups = [];
+  const index = new Map();
+  for (const hit of hits) {
+    if (!index.has(hit.path)) {
+      index.set(hit.path, groups.length);
+      groups.push([]);
+    }
+    groups[index.get(hit.path)].push(hit);
+  }
+  const ordered = [];
+  for (const group of groups) {
+    ordered.push(
+      ...group.filter((hit) => isPreferredHit(hit, pattern)),
+      ...group.filter((hit) => !isPreferredHit(hit, pattern)),
+    );
+  }
+  return ordered;
+}
+
+function foldHitsLine(folded) {
+  const files = uniquePaths(folded.map((hit) => hit.path));
+  const listed = files.slice(0, 8);
+  const extra = files.length > listed.length ? ` +${files.length - listed.length}` : "";
+  return `+${folded.length} more hits in these files: ${listed.join(", ")}${extra} — detail:"full"`;
 }
 
 function fuzzyNames(hits, pattern) {
@@ -209,22 +313,14 @@ function formatGrep(result, full) {
     );
   }
 
-  if (shown > 0) {
+  const partition = partitionGrep(hits, pattern);
+  const display = full ? hits : partition.shown;
+  if (display.length > 0) {
     lines.push("");
-    for (const hit of hits) {
-      if (full) {
-        for (let i = 0; i < (hit.contextBefore || []).length; i += 1) {
-          const line = hit.line - hit.contextBefore.length + i;
-          lines.push(`${hit.path}-${line}- ${hit.contextBefore[i]}`);
-        }
-      }
-      lines.push(`${hit.path}:${hit.line}:${hit.column} ${clampText(hit.text)}`);
-      if (full) {
-        for (let i = 0; i < (hit.contextAfter || []).length; i += 1) {
-          lines.push(`${hit.path}-${hit.line + i + 1}- ${hit.contextAfter[i]}`);
-        }
-      }
-    }
+    appendGroupedHits(lines, full ? orderGrepFull(hits, pattern) : display, full);
+  }
+  if (!full && partition.folded.length > 0) {
+    lines.push("", foldHitsLine(partition.folded));
   }
 
   if (fuzzy) {
@@ -280,6 +376,53 @@ function formatGrep(result, full) {
   };
 }
 
+function spansForHits(hits, symbols) {
+  const byName = new Map(
+    (symbols || [])
+      .filter((span) => span && span.name && span.path && span.startLine)
+      .map((span) => [span.name.toLowerCase(), span]),
+  );
+  const spans = [];
+  const seen = new Set();
+  for (const hit of hits) {
+    const span = byName.get(hit.symbol.toLowerCase());
+    if (!span || seen.has(span.name.toLowerCase())) continue;
+    seen.add(span.name.toLowerCase());
+    spans.push(span);
+  }
+  return spans;
+}
+
+function spanRange(span) {
+  const end = span.endLine || span.startLine;
+  return end !== span.startLine ? `${span.startLine}-${end}` : `${span.startLine}`;
+}
+
+function formatCallee(callee) {
+  const oneLine =
+    callee.text &&
+    callee.endLine === callee.line &&
+    !String(callee.text).includes("\n");
+  return `- ${callee.name} (${callee.path}:${callee.line})${
+    oneLine ? ` ${clampText(callee.text)}` : ""
+  }`;
+}
+
+function directCallees(spans) {
+  const seen = new Set();
+  const callees = [];
+  for (const span of spans) {
+    for (const callee of span.callees || []) {
+      if (!callee || !callee.name || !callee.path || !callee.line) continue;
+      const key = `${callee.name}\0${callee.path}\0${callee.line}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      callees.push(callee);
+    }
+  }
+  return callees;
+}
+
 function fileLine(file, index, hitLines) {
   const anchor = hitLines.get(file.path);
   const names = file.symbols.slice(0, MAP_SYMBOLS).map(symbolLabel);
@@ -331,12 +474,17 @@ function graphMap(result, dump, identifiers, hits, ranked, fileCap) {
     }
   }
 
+  const spans = spansForHits(hits, result.symbols);
+  const spanByName = new Map(spans.map((span) => [span.name.toLowerCase(), span]));
+
   if (hits.length > 0) {
     lines.push("");
     for (const hit of hits) {
-      lines.push(
-        `hit: ${hit.symbol} — ${hit.path}${hit.line ? `:${hit.line}` : ""}`,
-      );
+      const span = spanByName.get(hit.symbol.toLowerCase());
+      const loc = span
+        ? `${span.path}:${spanRange(span)}`
+        : `${hit.path}${hit.line ? `:${hit.line}` : ""}`;
+      lines.push(`hit: ${hit.symbol} — ${loc}`);
     }
   }
 
@@ -345,9 +493,26 @@ function graphMap(result, dump, identifiers, hits, ranked, fileCap) {
     if (hit.line && !hitLines.has(hit.path)) hitLines.set(hit.path, hit.line);
   }
 
-  const shownFiles = ranked.files.slice(0, fileCap);
+  const callees = directCallees(spans);
+  const shownCallees = callees.slice(0, CALLEE_CAP);
+  const hiddenCallees = callees.slice(CALLEE_CAP);
+  const shownFiles = spans.length > 0 ? [] : ranked.files.slice(0, fileCap);
   lines.push("");
-  if (shownFiles.length === 0) {
+  if (spans.length > 0) {
+    lines.push(`open these files (${spans.length})`);
+    spans.forEach((span, index) => {
+      lines.push(
+        `${index + 1}. ${span.path}:${spanRange(span)} — ${symbolLabel(span)}`,
+      );
+    });
+    if (shownCallees.length > 0) {
+      lines.push("", "calls (direct)");
+      for (const callee of shownCallees) lines.push(formatCallee(callee));
+      if (hiddenCallees.length > 0) {
+        lines.push(`+${hiddenCallees.length} more callees — detail:"full"`);
+      }
+    }
+  } else if (shownFiles.length === 0) {
     lines.push(
       "open these files (0) — the engine rendered no file section for this query.",
       "narrow with path=, or query the exact identifier.",
@@ -383,7 +548,7 @@ function graphMap(result, dump, identifiers, hits, ranked, fileCap) {
       "",
       `this query names ${identifiers.length} topics (${identifiers.join(
         ", ",
-      )}), so the map covers all of them — call one identifier per query for a narrow map.`,
+      )}), so this map is wider than one symbol.`,
     );
   }
 
@@ -418,7 +583,16 @@ function graphMap(result, dump, identifiers, hits, ranked, fileCap) {
     );
   }
 
-  return { lines, folded, related, shownFiles, foldedFiles: ranked.folded };
+  return {
+    lines,
+    folded,
+    related,
+    shownFiles,
+    spans,
+    callees,
+    hiddenCallees,
+    foldedFiles: ranked.folded,
+  };
 }
 
 function graphSource(dump, ranked) {
@@ -479,6 +653,11 @@ function formatGraph(result, full) {
       : 'no source in this map. detail:"full" returns the engine output for this query.',
   );
 
+  if (full && map.hiddenCallees.length > 0) {
+    lines.push("", "more callees");
+    for (const callee of map.hiddenCallees) lines.push(formatCallee(callee));
+  }
+
   if (full) {
     lines.push("", "**Source Code**");
     if (source.omitted.length === 0 && dump.verbatimNote) {
@@ -506,13 +685,31 @@ function formatGraph(result, full) {
         path: hit.path,
         line: hit.line,
       })),
-      files: map.shownFiles.map((file) => ({
-        path: file.path,
-        symbols: file.symbols.slice(0, MAP_SYMBOLS).map((symbol) => symbol.name),
-        symbolCount: file.symbolCount,
-        renderedLines: file.renderedLines,
+      files:
+        map.spans.length > 0
+          ? map.spans.map((span) => ({
+              path: span.path,
+              symbols: [span.name],
+              symbolCount: 1,
+              renderedLines: [span.startLine, span.endLine || span.startLine],
+            }))
+          : map.shownFiles.map((file) => ({
+              path: file.path,
+              symbols: file.symbols.slice(0, MAP_SYMBOLS).map((symbol) => symbol.name),
+              symbolCount: file.symbolCount,
+              renderedLines: file.renderedLines,
+            })),
+      paths:
+        map.spans.length > 0
+          ? map.spans.map((span) => span.path)
+          : map.shownFiles.map((file) => file.path),
+      callees: map.callees.map((callee) => ({
+        name: callee.name,
+        path: callee.path,
+        line: callee.line,
+        ...(callee.endLine ? { endLine: callee.endLine } : {}),
+        ...(callee.text && callee.endLine === callee.line ? { text: callee.text } : {}),
       })),
-      paths: map.shownFiles.map((file) => file.path),
       alsoRanked: uniquePaths([
         ...map.folded.map((entry) => entry.name),
         ...map.foldedFiles.map((file) => file.path),

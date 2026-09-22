@@ -400,11 +400,21 @@ test(
       });
       assert.equal(map.isError, false, map.text);
       assert.match(map.text, /exact hit on format_chat_details/);
-      assert.match(map.text, /hit: format_chat_details — src\/leagent\/generator\.py:11/);
-      assert.match(
-        map.text,
-        /open these files \(\d+\)\n1\. src\/leagent\/generator\.py:11 — format_chat_details/,
+      assert.match(map.text, /hit: format_chat_details — src\/leagent\/generator\.py:11-/);
+      const span = map.text.match(
+        /open these files \(1\)\n1\. src\/leagent\/generator\.py:(\d+)-(\d+) — format_chat_details/,
       );
+      assert.ok(span, map.text);
+      const source = readFileSync(join(repo, "src/leagent/generator.py"), "utf8").split("\n");
+      const start = Number(span[1]);
+      const end = Number(span[2]);
+      assert.equal(start, 11);
+      assert.match(source[start - 1], /def format_chat_details/);
+      assert.match(source[end - 1], /return details/);
+      assert.ok(end < source.length, map.text);
+      assert.equal(map.text.includes("relevant lines"), false);
+      assert.match(map.text, /- get_scores \(src\/leagent\/retrieval\/bm25\.py:\d+\)/);
+      assert.equal(map.text.split("- get_scores (").length - 1, 1);
       assert.equal(map.payload.paths[0], "src/leagent/generator.py");
       assert.equal(map.text.includes("```"), false);
       assert.equal(map.payload.sourceIncluded, false);

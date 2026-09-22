@@ -91,11 +91,12 @@ Every reply starts with index freshness (`ready` / `indexing` / `degraded` and
 `lastSuccessfulSync`) and the resolved root. After that there are two layers,
 and the default is the cheap one:
 
-- **layer 0** (default, `detail: "summary"`) is a map: the hit symbols, the
-  files to open next with their relevant line ranges, and what depends on them.
-  It carries **no source code** — opening the named files with the host's own
-  `Read` is cheaper than codeq forwarding them, and it keeps a `graph` reply
-  around 1 KB instead of 5 KB.
+- **layer 0** (default, `detail: "summary"`) is a map. For `graph` that is the
+  query symbol's own span (start–end of that function or class, not the whole
+  file) and its direct callees (name, file, line). For `grep`, hits are grouped
+  by file with definition and assignment lines first. It carries **no source
+  code** — opening the named span with the host's own `Read` is cheaper than
+  codeq forwarding it, and it keeps a `graph` reply around 1 KB instead of 5 KB.
 - **layer 1** (`detail: "full"`, CLI `--full`) repeats the whole layer 0 map
   verbatim and then adds what the map withheld: source for `graph` with the
   query's target file first, context lines and full metadata for `grep` and
@@ -113,20 +114,35 @@ half a file, and names what it dropped plus the `path=` that retrieves it.
 
 ```text
 [ready] root /repo via root argument
-graph "how does formatMcpToolResult work" — 43 symbols in 3 files, exact hit on formatMcpToolResult
+graph "how does render_widget work" — 6 symbols in 2 files, exact hit on render_widget
 
-hit: formatMcpToolResult — src/mcp-format.js:82
+hit: render_widget — src/pkg/widget.py:14-22
 
-open these files (3)
-1. src/mcp-format.js:82 — formatMcpToolResult(function), MCP_INSTRUCTIONS(constant) +7 · relevant lines 1-135
-2. src/mcp.js — send, positiveInteger, isUnusableWorkspace, jsonRpcError +25 · relevant lines 252-438
-3. bin/codeq.js — fail, positiveInteger, queryDaemon, rootOrigin +21 · relevant lines 1-190
+open these files (1)
+1. src/pkg/widget.py:14-22 — render_widget(function)
 
-depends on this (blast radius, query symbols only)
-- formatMcpToolResult (src/mcp-format.js:82) — 3 callers in src/mcp.js; tests: test/mcp-format.test.js
-+4 other symbols the engine ranked (TOOLS, toolRequest, MCP_INSTRUCTIONS, MCP_USAGE) — detail:"full"
+calls (direct)
+- layout (src/pkg/layout.py:1)
+- paint (src/pkg/canvas.py:1)
+- shade (src/pkg/canvas.py:5) def shade(color): return color
+- clamp (src/pkg/widget.py:10)
 
-no source in this map. detail:"full" returns source for these 3 files (~16 KB), target file first.
+also ranked, on shorter tokens than render_widget: src/pkg/noise/format_help.py — detail:"full" expands them.
+
+no source in this map. detail:"full" returns source for these 2 files (~2 KB), target file first.
+```
+
+```text
+[ready] root /repo via root argument
+grep status — 13 matches in 3 files, exact
+
+src/pkg/view.py
+src/pkg/view.py:9:1 status = "shown"
+src/pkg/widget.py
+src/pkg/widget.py:7:1 STATUS = "idle"
+src/pkg/widget.py:21:5 status = color
+
++10 more hits in these files: src/pkg/canvas.py, src/pkg/view.py, src/pkg/widget.py — detail:"full"
 ```
 
 The MCP text block is that map and nothing else. Machine fields (`shown`,
@@ -189,7 +205,7 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/ma
 To pin the current GitHub release instead:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.8.tar.gz
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.9.tar.gz
 ```
 
 ## Commands

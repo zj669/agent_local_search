@@ -3,6 +3,7 @@
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
+import { symbolIndex } from "./symbol-index.js";
 
 const require = createRequire(import.meta.url);
 const root = process.argv[2];
@@ -77,7 +78,7 @@ lines.on("line", (line) => {
   }
   handler
     .execute("codegraph_explore", { query: request.query })
-    .then((result) => {
+    .then(async (result) => {
       if (result.isError) {
         send({
           type: "response",
@@ -85,10 +86,18 @@ lines.on("line", (line) => {
           error: result.content.map((part) => part.text).join("\n"),
         });
       } else {
+        const text = result.content.map((part) => part.text).join("\n");
+        let symbols = [];
+        try {
+          symbols = await symbolIndex(graph, request.query, text);
+        } catch {
+          symbols = [];
+        }
         send({
           type: "response",
           id: request.id,
-          result: result.content.map((part) => part.text).join("\n"),
+          result: text,
+          symbols,
         });
       }
     })
