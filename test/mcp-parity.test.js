@@ -547,8 +547,15 @@ test(
       ),
     );
     // --json is the machine anchor and stays the whole daemon result.
-    assert.match(String(cliGraphWt.result), /AlphaWorktreeWidget/);
-    assert.match(String(cliGraphWt.result), /Source Code/);
+    // Fast path leaves the explore dump empty; symbols still name the entry.
+    assert.equal("result" in cliGraphWt, true);
+    assert.equal(Array.isArray(cliGraphWt.symbols), true);
+    assert.ok(
+      (cliGraphWt.symbols || []).some((span) =>
+        String(span.name).includes("AlphaWorktreeWidget"),
+      ) || String(cliGraphWt.result).includes("AlphaWorktreeWidget"),
+      "json dump must still name the worktree widget",
+    );
 
     // Human CLI prints the same locator map as MCP, not the engine dump.
     const cliGraphHuman = cli(

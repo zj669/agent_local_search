@@ -6,7 +6,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createFramedParser, encodeMessage } from "../src/mcp.js";
-import { directCalleeNodes, directCallerNodes, pickDefinition, symbolIndex } from "../src/symbol-index.js";
+import {
+  directCalleeNodes,
+  directCallerNodes,
+  graphSearch,
+  identifiersHaveExactDefs,
+  pickDefinition,
+  symbolIndex,
+} from "../src/symbol-index.js";
 
 const bin = fileURLToPath(new URL("../bin/codeq.js", import.meta.url));
 
@@ -266,6 +273,148 @@ test("symbolIndex keeps every exact-name definition in scope and drops the rest"
     false,
   );
 });
+
+function fakeGraph(nodes, { throwOnName = null } = {}) {
+  const byId = Object.fromEntries(nodes.map((node) => [node.id, node]));
+  return {
+    getNodesByName: (name) => {
+      if (throwOnName && name === throwOnName) throw new Error("getNodesByName failed");
+      const wanted = String(name).toLowerCase();
+      return nodes.filter((node) => String(node.name).toLowerCase() === wanted);
+    },
+    getOutgoingEdges: (id) => {
+      const node = byId[id];
+      return node?.outgoing || [];
+    },
+    getIncomingEdges: (id) => {
+      const node = byId[id];
+      return node?.incoming || [];
+    },
+    getNode: (id) => byId[id],
+  };
+}
+
+test("graphSearch skips explore when every identifier has an exact-name definition", async () => {
+  const paint = {
+    id: "paint",
+    kind: "function",
+    name: "paint",
+    filePath: "src/pkg/canvas.py",
+    startLine: 1,
+    endLine: 2,
+  };
+  const show = {
+    id: "show",
+    kind: "method",
+    name: "show",
+    filePath: "src/pkg/widget.py",
+    startLine: 25,
+    endLine: 27,
+  };
+  const render = {
+    id: "render",
+    kind: "function",
+    name: "render_widget",
+    filePath: "src/pkg/widget.py",
+    startLine: 14,
+    endLine: 22,
+    outgoing: [{ kind: "calls", target: "paint" }],
+    incoming: [{ kind: "calls", source: "show" }],
+  };
+  const graph = fakeGraph([render, paint, show]);
+  let explored = 0;
+  const result = await graphSearch(graph, "how does render_widget work", async () => {
+    explored += 1;
+    return "Found 9 symbols across 2 files.\n";
+  });
+  assert.equal(explored, 0);
+  assert.equal(result.result, "");
+  assert.equal(result.symbols.length, 1);
+  assert.equal(result.symbols[0].name, "render_widget");
+  assert.deepEqual(
+    result.symbols[0].callees.map((callee) => callee.name),
+    ["paint"],
+  );
+  assert.deepEqual(
+    result.symbols[0].callers.map((caller) => caller.name),
+    ["show"],
+  );
+  assert.equal(identifiersHaveExactDefs(graph, "how does render_widget work"), true);
+});
+
+test("graphSearch explores when any identifier lacks an exact-name definition", async () => {
+  const graph = fakeGraph([
+    {
+      id: "render",
+      kind: "function",
+      name: "render_widget",
+      filePath: "src/pkg/widget.py",
+      startLine: 14,
+      endLine: 22,
+    },
+  ]);
+  const seen = [];
+  const mixed = await graphSearch(
+    graph,
+    "how does render_widget missing_identifier work",
+    async (query) => {
+      seen.push(query);
+      return "Found 0 symbols across 0 files.\n";
+    },
+  );
+  assert.deepEqual(seen, ["how does render_widget missing_identifier work"]);
+  assert.equal(mixed.result, "Found 0 symbols across 0 files.\n");
+  assert.equal(mixed.symbols.some((span) => span.name === "render_widget"), true);
+  assert.equal(identifiersHaveExactDefs(graph, "how does missing_identifier work"), false);
+
+  seen.length = 0;
+  await graphSearch(graph, "how does this work", async (query) => {
+    seen.push(query);
+    return "Found 0 symbols across 0 files.\n";
+  });
+  assert.deepEqual(seen, ["how does this work"]);
+});
+
+test("graphSearch explores when getNodesByName fails or a same-name node is out of scope", async () => {
+  const thrown = fakeGraph(
+    [
+      {
+        id: "render",
+        kind: "function",
+        name: "render_widget",
+        filePath: "src/pkg/widget.py",
+        startLine: 14,
+        endLine: 22,
+      },
+    ],
+    { throwOnName: "render_widget" },
+  );
+  let explored = 0;
+  await graphSearch(thrown, "render_widget", async () => {
+    explored += 1;
+    return "Found 0 symbols across 0 files.\n";
+  });
+  assert.equal(explored, 1);
+
+  const scoped = fakeGraph([
+    {
+      id: "out",
+      kind: "function",
+      name: "render_widget",
+      filePath: "src/other/widget.py",
+      startLine: 2,
+      endLine: 9,
+    },
+  ]);
+  explored = 0;
+  const result = await graphSearch(scoped, "render_widget path:src/pkg", async () => {
+    explored += 1;
+    return "Found 0 symbols across 0 files.\n";
+  });
+  assert.equal(explored, 1);
+  assert.equal(result.symbols.length, 0);
+});
+
 
 test(
   "a pkg/widget repository: symbol span, one callee list, grouped assignments",

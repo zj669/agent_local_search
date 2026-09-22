@@ -114,6 +114,21 @@ function locatorsFrom(node, edges, getNode, endpoint) {
   return relatedNodes(node, edges, getNode, endpoint).map(locator);
 }
 
+export function identifiersHaveExactDefs(graph, query) {
+  const names = queryIdentifiers(queryWithoutScope(query));
+  if (names.length === 0) return false;
+  if (typeof graph?.getNodesByName !== "function") return false;
+  const constraint = pathConstraint(query);
+  try {
+    for (const name of names) {
+      if (exactNameDefs(graph, name, constraint).length === 0) return false;
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 export function symbolIndex(graph, query) {
   const constraint = pathConstraint(query);
   const names = queryIdentifiers(queryWithoutScope(query));
@@ -144,6 +159,24 @@ export function symbolIndex(graph, query) {
     }
   }
   return symbols;
+}
+
+export async function graphSearch(graph, query, explore) {
+  if (identifiersHaveExactDefs(graph, query)) {
+    try {
+      return { result: "", symbols: symbolIndex(graph, query) };
+    } catch {
+      // Fall through to the 0.3.2 explore + pin path.
+    }
+  }
+  const text = await explore(query);
+  let symbols = [];
+  try {
+    symbols = symbolIndex(graph, query);
+  } catch {
+    symbols = [];
+  }
+  return { result: text, symbols };
 }
 
 export { DEFINITION_KINDS };

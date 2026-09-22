@@ -23,24 +23,21 @@ export function scopedFindQuery(query, constraint) {
 
 export function planFindSearch(query, constraint) {
   const fragment = globFallbackFragment(query);
+  if (fragment) {
+    return {
+      primary: scopedFindQuery(fragment, constraint),
+      globFallback: { from: query, to: fragment },
+    };
+  }
   return {
     primary: scopedFindQuery(query, constraint),
-    fallback: fragment
-      ? {
-          query: scopedFindQuery(fragment, constraint),
-          globFallback: { from: query, to: fragment },
-        }
-      : null,
+    globFallback: null,
   };
 }
 
 export function runFindSearch(plan, search) {
-  const first = search(plan.primary);
-  if ((first?.items?.length ?? 0) > 0 || !plan.fallback) {
-    return { value: first, globFallback: null };
-  }
   return {
-    value: search(plan.fallback.query),
-    globFallback: plan.fallback.globFallback,
+    value: search(plan.primary),
+    globFallback: plan.globFallback,
   };
 }

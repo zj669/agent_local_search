@@ -3,7 +3,7 @@
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { symbolIndex } from "./symbol-index.js";
+import { graphSearch } from "./symbol-index.js";
 
 const require = createRequire(import.meta.url);
 const root = process.argv[2];
@@ -76,30 +76,20 @@ lines.on("line", (line) => {
     send({ type: "response", id: null, error: `invalid request: ${error.message}` });
     return;
   }
-  handler
-    .execute("codegraph_explore", { query: request.query })
-    .then(async (result) => {
-      if (result.isError) {
-        send({
-          type: "response",
-          id: request.id,
-          error: result.content.map((part) => part.text).join("\n"),
-        });
-      } else {
-        const text = result.content.map((part) => part.text).join("\n");
-        let symbols = [];
-        try {
-          symbols = await symbolIndex(graph, request.query, text);
-        } catch {
-          symbols = [];
-        }
-        send({
-          type: "response",
-          id: request.id,
-          result: text,
-          symbols,
-        });
-      }
+  graphSearch(graph, request.query, async (query) => {
+    const result = await handler.execute("codegraph_explore", { query });
+    if (result.isError) {
+      throw new Error(result.content.map((part) => part.text).join("\n"));
+    }
+    return result.content.map((part) => part.text).join("\n");
+  })
+    .then(({ result, symbols }) => {
+      send({
+        type: "response",
+        id: request.id,
+        result,
+        symbols,
+      });
     })
     .catch((error) =>
       send({ type: "response", id: request.id, error: error.message }),
