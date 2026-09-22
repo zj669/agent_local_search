@@ -1084,7 +1084,7 @@ test("README default MCP snippet is the wrapper, no npx, no cwd field", () => {
   assert.equal(firstSnippet.includes("CODEQ_CWD"), false);
   assert.match(readme, /npx steals stdin/);
   assert.match(readme, /codeq-mcp/);
-  assert.match(readme, /@zj669\/codeq@0\.3\.1/);
+  assert.match(readme, new RegExp(`@zj669\\/codeq@${version.replaceAll(".", "\\.")}`));
   assert.match(readme, /docs\/mcp-install\.md/);
   assert.equal(readme.includes("leagent"), false);
   assert.equal(readme.includes("npx -y"), false);
@@ -1095,7 +1095,7 @@ test("repo MCP install guide covers harness clients without a second wrapper", (
     join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "mcp-install.md"),
     "utf8",
   );
-  assert.match(guide, /@zj669\/codeq@0\.3\.1/);
+  assert.match(guide, new RegExp(`@zj669\\/codeq@${version.replaceAll(".", "\\.")}`));
   assert.match(
     guide,
     /claude mcp add --scope user --transport stdio codeq -- codeq mcp/,
