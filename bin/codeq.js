@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { queryDaemon } from "../src/client.js";
-import { formatMcpToolResult, rootOrigin } from "../src/mcp-format.js";
+import { formatMcpToolResult, freshnessLine } from "../src/mcp-format.js";
 import { runMcpServer } from "../src/mcp.js";
 import { maybeRerank } from "../src/jev.js";
 
@@ -88,7 +88,7 @@ function parseArguments(argv) {
     }
     if (arg === "--full" || arg === "--detail") {
       fail(
-        "0.3.0 has no --full or --detail; replies are locators (use --json for the daemon dump)",
+        "0.3.1 has no --full or --detail; replies are locators (use --json for the daemon dump)",
       );
     }
     if (takesValue.has(arg)) {
@@ -127,23 +127,7 @@ function parseArguments(argv) {
 }
 
 function printStatus(result) {
-  const status = result.status || "unknown";
-  const origin = rootOrigin(result);
-  const via = origin ? ` via ${origin}` : "";
-  const note = result.rootNote ? ` (${result.rootNote})` : "";
-  const fuzzy = result.mode === "fuzzy" ? "[fuzzy]" : "";
-  const stale =
-    status === "degraded" || status === "indexing"
-      ? `${
-          result.lastSuccessfulSync
-            ? ` lastSuccessfulSync ${result.lastSuccessfulSync}`
-            : ""
-        }`
-      : "";
-  process.stderr.write(`[${status}]${fuzzy} root ${result.root}${via}${note}${stale}\n`);
-  if ((status === "degraded" || status === "indexing") && result.warning) {
-    process.stderr.write(`warning: ${result.warning}\n`);
-  }
+  process.stderr.write(`${freshnessLine(result)}\n`);
 }
 
 function printHuman(command, result) {

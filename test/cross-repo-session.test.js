@@ -333,7 +333,7 @@ test(
       }
       assert.match(
         subdirectoryAsRoot.lines[0],
-        new RegExp(`root ${repo} via root argument \\(root named a subdirectory`),
+        new RegExp(`root ${repo} via root argument; scope src/leagent/agent/ \\(subdir-as-root; use path\\)`),
       );
       for (const reply of [narrow, subdirectoryAsRoot]) {
         assert.ok(
@@ -357,8 +357,9 @@ test(
       assert.equal(exact.lines[0].includes("[fuzzy]"), false);
       assert.equal(exact.text.includes("NANTIANMEN_TEST_DATABASE_URL"), false);
       assert.match(exact.text, /0 matches/);
-      assert.match(exact.text, /pass regex: true/);
-      assert.match(exact.text, /fuzzy: true/);
+      assert.match(exact.text, /check root above/);
+      assert.match(exact.text, /fuzzy:true/);
+      assert.equal(exact.text.includes("regex"), false);
 
       const approximate = await session.call("grep", {
         root: worktree,
@@ -381,7 +382,7 @@ test(
       assert.equal("detail" in hits.payload, false);
       assert.match(
         hits.text,
-        /^src\/leagent\/generator\.py:11:\d+ def format_chat_details\(session, message, \*, verbose=False\):$/m,
+        /^src\/leagent\/generator\.py:11 def format_chat_details\(session, message, \*, verbose=False\):$/m,
       );
       assert.equal(hits.text.includes("```"), false);
       assert.ok(hits.payload.hits.length >= 1);
@@ -393,10 +394,10 @@ test(
         query: "how does format_chat_details work",
       });
       assert.equal(map.isError, false, map.text);
-      assert.match(map.text, /exact hit on format_chat_details/);
-      assert.match(map.text, /hit: format_chat_details — src\/leagent\/generator\.py:11-/);
+      assert.match(map.text, /exact format_chat_details/);
+      assert.match(map.text, /src\/leagent\/generator\.py:11-/);
       const span = map.text.match(
-        /open these files \(1\)\n1\. src\/leagent\/generator\.py:(\d+)-(\d+) — format_chat_details/,
+        /^src\/leagent\/generator\.py:(\d+)-(\d+) format_chat_details$/m,
       );
       assert.ok(span, map.text);
       const source = readFileSync(join(repo, "src/leagent/generator.py"), "utf8").split("\n");
@@ -407,8 +408,8 @@ test(
       assert.match(source[end - 1], /return details/);
       assert.ok(end < source.length, map.text);
       assert.equal(map.text.includes("relevant lines"), false);
-      assert.match(map.text, /- get_scores \(src\/leagent\/retrieval\/bm25\.py:\d+\)/);
-      assert.equal(map.text.split("- get_scores (").length - 1, 1);
+      assert.match(map.text, /src\/leagent\/retrieval\/bm25\.py:\d+(-\d+)? get_scores/);
+      assert.equal(map.text.split("get_scores").length - 1, 1);
       assert.equal(map.payload.entries[0].path, "src/leagent/generator.py");
       assert.equal(map.text.includes("```"), false);
       assert.equal("sourceIncluded" in map.payload, false);

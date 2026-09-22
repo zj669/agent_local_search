@@ -254,7 +254,7 @@ test(
     });
     assert.equal(map.isError, false, map.text);
     const span = map.text.match(
-      /open these files \(1\)\n1\. src\/pkg\/widget\.py:(\d+)-(\d+) — render_widget\(function\)/,
+      /^src\/pkg\/widget\.py:(\d+)-(\d+) render_widget$/m,
     );
     assert.ok(span, map.text);
     const lines = WIDGET.split("\n");
@@ -273,17 +273,18 @@ test(
     );
     assert.equal(map.text.includes("1. src/pkg/noise/format_help.py"), false);
     for (const name of ["layout", "paint", "clamp", "shade"]) {
-      assert.equal(map.text.split(`- ${name} (`).length - 1, 1, map.text);
+      assert.match(map.text, new RegExp(`${name}`), map.text);
     }
-    assert.match(map.text, /- shade \(src\/pkg\/canvas\.py:\d+\) def shade\(color\): return color/);
+    assert.match(map.text, /src\/pkg\/canvas\.py:\d+(-\d+)? shade/);
+    assert.equal(map.text.includes("def shade(color): return color"), false);
     assert.equal(map.text.includes('return status or "plain"'), false);
     assert.equal(map.text.includes("```"), false);
 
     const grep = await call("grep", { root: repo, pattern: "status" });
     assert.equal(grep.isError, false, grep.text);
-    assert.match(grep.text, /^src\/pkg\/widget\.py:\d+:\d+ STATUS = "idle"$/m);
-    assert.match(grep.text, /^src\/pkg\/widget\.py:\d+:\d+ status = color$/m);
-    assert.match(grep.text, /^src\/pkg\/view\.py:\d+:\d+ status = "shown"$/m);
+    assert.match(grep.text, /^src\/pkg\/widget\.py:\d+ STATUS = "idle"$/m);
+    assert.match(grep.text, /^src\/pkg\/widget\.py:\d+ status = color$/m);
+    assert.match(grep.text, /^src\/pkg\/view\.py:\d+ status = "shown"$/m);
     assert.match(grep.text, /return status/);
     assert.equal(grep.text.includes("more hits in these files:"), false);
     assert.equal(grep.text.includes("detail:\"full\""), false);

@@ -90,7 +90,7 @@ test("freshness line leads every MCP reply", () => {
   });
   assert.match(
     formatted.text,
-    /^\[degraded\] root \/repo via cwd \(roots\/list\) lastSuccessfulSync /,
+    /^\[degraded\] root \/repo via cwd:roots\/list lastSuccessfulSync /,
   );
   assert.match(formatted.text, /warning FFF watcher/);
   const payload = formatted.structuredContent;
@@ -132,7 +132,7 @@ test("every reply says which argument selected the root", () => {
   assert.equal(rootOrigin({ rootSource: "path" }), "path argument");
   assert.equal(
     rootOrigin({ rootSource: "cwd", cwdSource: "spawn cwd" }),
-    "cwd (spawn cwd)",
+    "cwd:spawn cwd",
   );
   assert.equal(rootOrigin({}), null);
 
@@ -164,15 +164,17 @@ test("graph is a locator map: no source, no engine self-description", () => {
   assert.equal(text.includes("codegraph_explore"), false);
   assert.equal(text.includes("detail:\"full\""), false);
 
-  assert.match(text, /graph "how does createSession work" — 43 symbols in 2 files/);
-  assert.match(text, /exact hit on createSession/);
-  assert.match(text, /hit: createSession — src\/session\.ts:12-40/);
-  assert.match(text, /open these files \(1\)/);
-  assert.match(text, /1\. src\/session\.ts:12-40 — createSession\(function\)/);
-  assert.match(text, /calls \(direct\)/);
-  assert.match(text, /- send \(src\/app\.ts:252\)/);
-  assert.equal(text.split("- send (").length - 1, 1);
-  assert.match(text, /- ready \(src\/session\.ts:4\) function ready\(\) \{ return true; \}/);
+  assert.match(text, /graph "how does createSession work" — exact createSession/);
+  assert.equal(text.includes("43 symbols"), false);
+  assert.equal(text.includes("hit:"), false);
+  assert.equal(text.includes("open these files"), false);
+  assert.match(text, /^src\/session\.ts:12-40 createSession$/m);
+  assert.equal(text.includes("createSession(function)"), false);
+  assert.match(text, /^callees$/m);
+  assert.match(text, /^src\/app\.ts:252-270 send$/m);
+  assert.equal(text.split("src/app.ts:252-270 send").length - 1, 1);
+  assert.match(text, /^src\/session\.ts:4 ready$/m);
+  assert.equal(text.includes("function ready()"), false);
 
   const payload = formatted.structuredContent;
   assert.equal(payload.truncated, false);
@@ -189,15 +191,22 @@ test("graph is a locator map: no source, no engine self-description", () => {
   );
 });
 
-test("graph still has navigable entries when the identifier did not hit", () => {
+test("graph anchored miss does not list a fake entry", () => {
   const formatted = formatMcpToolResult("graph", {
     ...graphResult,
     query: "how does format_chat_details work",
   });
   assert.match(formatted.text, /NO exact hit on format_chat_details/);
-  assert.match(formatted.text, /engine ranked these instead: createSession, TOOLS/);
-  assert.ok(formatted.structuredContent.entries.length > 0);
-  assert.equal(formatted.structuredContent.entries[0].path, "src/session.ts");
+  assert.match(
+    formatted.text,
+    /next: grep format_chat_details; narrow path if needed/,
+  );
+  assert.equal(formatted.text.includes("hit:"), false);
+  assert.equal(formatted.text.includes("open these files"), false);
+  assert.equal(formatted.text.includes("engine ranked these instead"), false);
+  assert.deepEqual(formatted.structuredContent.entries, []);
+  assert.deepEqual(formatted.structuredContent.callees, []);
+  assert.equal(formatted.structuredContent.truncated, false);
 });
 
 test("graph opens the query identifier's span first", () => {
@@ -234,9 +243,11 @@ test("graph opens the query identifier's span first", () => {
       },
     ],
   });
-  assert.match(formatted.text, /hit: format_chat_details — src\/pkg\/generator\.py:317-340/);
+  assert.match(formatted.text, /exact format_chat_details/);
+  assert.match(formatted.text, /^src\/pkg\/generator\.py:317-340 format_chat_details$/m);
+  assert.equal(formatted.text.includes("hit:"), false);
   assert.equal(formatted.structuredContent.entries[0].path, "src/pkg/generator.py");
-  assert.match(formatted.text, /- get_scores \(src\/pkg\/bm25\.py:4\)/);
+  assert.match(formatted.text, /^src\/pkg\/bm25\.py:4-9 get_scores$/m);
 });
 
 test("graph caps the callee list and keeps multi-line bodies out", () => {
@@ -260,23 +271,34 @@ test("graph caps the callee list and keeps multi-line bodies out", () => {
       },
     ],
   });
-  assert.match(formatted.text, /- step0 \(src\/pkg\/step0\.py:1\)/);
-  assert.match(formatted.text, /- step7 \(src\/pkg\/step7\.py:8\)/);
+  assert.match(formatted.text, /^src\/pkg\/step0\.py:1-4 step0$/m);
+  assert.match(formatted.text, /^src\/pkg\/step3\.py:4-7 step3$/m);
+  assert.equal(formatted.text.includes("step4"), false);
   assert.equal(formatted.text.includes("step8"), false);
   assert.equal(formatted.text.includes("return step"), false);
   assert.equal(formatted.structuredContent.truncated, true);
-  assert.match(formatted.text, /truncated: 1 more direct callee/);
+  assert.match(formatted.text, /\+5 callees omitted/);
+  assert.equal(formatted.text.includes("bounded neighborhood"), false);
 });
 
-test("graph says when one query stacked several topics", () => {
+test("graph miss without identifiers does not invent a locator", () => {
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    query: "how does this work",
+  });
+  assert.match(formatted.text, /NO exact hit/);
+  assert.match(formatted.text, /next: query an identifier or "how does X work"/);
+  assert.deepEqual(formatted.structuredContent.entries, []);
+  assert.deepEqual(formatted.structuredContent.callees, []);
+});
+
+test("graph does not coach a wider map in the reply", () => {
   const formatted = formatMcpToolResult("graph", {
     ...graphResult,
     query: "regression benchmark replay",
   });
-  assert.match(
-    formatted.text,
-    /this query names 3 topics \(regression, benchmark, replay\), so this map is wider than one symbol\./,
-  );
+  assert.equal(formatted.text.includes("this query names"), false);
+  assert.equal(formatted.text.includes("wider than one symbol"), false);
 });
 
 test("grep groups hits by file, prefers definitions, and does not fold the rest", () => {
@@ -297,7 +319,9 @@ test("grep groups hits by file, prefers definitions, and does not fold the rest"
     results: hits,
   });
   const text = formatted.text;
-  assert.match(text, /^src\/pkg\/widget\.py:3:1 STATUS = "idle"$/m);
+  assert.match(text, /^src\/pkg\/widget\.py:3 STATUS = "idle"$/m);
+  assert.equal(text.includes("src/pkg/widget.py:3:1"), false);
+  assert.equal(text.includes("\nsrc/pkg/widget.py\n"), false);
   assert.match(text, /return status/);
   assert.equal(text.includes("detail:\"full\""), false);
   assert.equal(formatted.structuredContent.hits.length, 7);
@@ -329,7 +353,7 @@ test("grep is exact by default and never labels itself fuzzy", () => {
   });
 });
 
-test("grep zero hits stay zero and point at regex and fuzzy", () => {
+test("grep zero hits check root first and only hint regex for .* / .+", () => {
   const formatted = formatMcpToolResult("grep", {
     status: "ready",
     root: "/repo",
@@ -339,9 +363,20 @@ test("grep zero hits stay zero and point at regex and fuzzy", () => {
     results: [],
   });
   assert.match(formatted.text, /grep PG_DATABASE_URL — 0 matches/);
-  assert.match(formatted.text, /pass regex: true if you meant a regular expression/);
-  assert.match(formatted.text, /fuzzy: true for approximate names/);
+  assert.match(formatted.text, /check root above/);
+  assert.match(formatted.text, /fuzzy:true only for approximate\/different identifiers/);
+  assert.equal(formatted.text.includes("regex"), false);
   assert.deepEqual(formatted.structuredContent.hits, []);
+
+  const regexShaped = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "createSess.*",
+    mode: "plain",
+    fuzzyRequested: false,
+    results: [],
+  });
+  assert.match(regexShaped.text, /regex:true if this was a regular expression/);
 });
 
 test("grep fuzzy is labelled on the first line and names what it matched", () => {
@@ -379,7 +414,8 @@ test("grep reports a real nextCursor instead of a fake total", () => {
     })),
   });
   assert.match(formatted.text, /grep reply_success — 16 shown, more remain/);
-  assert.match(formatted.text, /cursor=abc/);
+  assert.match(formatted.text, /more: next page available/);
+  assert.equal(formatted.text.includes("cursor=abc"), false);
   assert.equal(formatted.structuredContent.truncated, true);
   assert.equal(formatted.structuredContent.nextCursor, "abc");
 });
@@ -428,15 +464,38 @@ test("find pins exact path matches first without Jev", () => {
   ]);
 });
 
-test("find says glob syntax is not how find works", () => {
-  const formatted = formatMcpToolResult("find", {
+test("find says glob syntax is not how find works only on a miss", () => {
+  const miss = formatMcpToolResult("find", {
     status: "ready",
     root: "/repo",
     query: "mr_review_service/**/*profile*",
     total: 0,
     results: [],
   });
-  assert.match(formatted.text, /find is a fuzzy path fragment, not a glob/);
+  assert.match(miss.text, /find uses path fragments, not globs; try "profile"/);
+
+  const hit = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "*session*",
+    total: 1,
+    results: [{ path: "src/session.ts" }],
+  });
+  assert.equal(hit.text.includes("glob"), false);
+  assert.equal(hit.text.includes("path fragment"), false);
+});
+
+test("find truncation does not mention the page cap", () => {
+  const formatted = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "test",
+    total: 84,
+    results: Array.from({ length: 16 }, (_, i) => ({ path: `src/f${i}.ts` })),
+  });
+  assert.match(formatted.text, /find test — 16\/84 matches/);
+  assert.match(formatted.text, /more: refine query\/path/);
+  assert.equal(formatted.text.includes("capped at 16"), false);
 });
 
 test("the dump parser keys off the file-section marker, not a path regex", () => {
@@ -446,6 +505,22 @@ test("the dump parser keys off the file-section marker, not a path regex", () =>
     ["src/session.ts", "src/app.ts", "lib/extra.ts"],
   );
   assert.equal(dump.symbolCount, 43);
+});
+
+test("file-as-root note is a relative scope and the path action", () => {
+  const formatted = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/Users/zj669/project/leagent",
+    rootSource: "root",
+    rootNote:
+      "root named a file, so it resolved to this repository narrowed to src/leagent/chat/policy_selector.py; pass a file as path, not root",
+    query: "policy",
+    results: [],
+  });
+  assert.equal(
+    formatted.text.split("\n")[0],
+    "[ready] root /Users/zj669/project/leagent via root argument; scope src/leagent/chat/policy_selector.py (file-as-root; use path)",
+  );
 });
 
 test("query identifiers drop the prose around them", () => {

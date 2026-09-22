@@ -135,20 +135,21 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
   assert.equal(literalDots.result.isError, undefined);
   assert.equal(literalDots.result.structuredContent.hits.length, 0);
   assert.match(literalDots.result.content[0].text, /0 matches/);
-  assert.match(literalDots.result.content[0].text, /pass regex: true/);
+  assert.match(literalDots.result.content[0].text, /regex:true if this was a regular expression/);
 
   assert.ok(grepPayload.hits.some((item) => item.path.endsWith("session.ts")));
   assert.equal("mode" in grepPayload, false);
   assert.equal(regexGrep.result.content[0].text.includes("[fuzzy]"), false);
-  assert.match(regexGrep.result.content[0].text, /^src\/session\.ts:1:\d+ /m);
+  assert.match(regexGrep.result.content[0].text, /^src\/session\.ts:1 /m);
 
   const graphText = graph.result.content[0].text;
   assert.equal(graphText.includes("```"), false);
   assert.equal(/verbatim/i.test(graphText), false);
   assert.equal(/already performed/i.test(graphText), false);
   assert.equal(graphText.includes("codegraph_explore"), false);
-  assert.match(graphText, /open these files/);
+  assert.match(graphText, /exact createSession/);
   assert.match(graphText, /createSession/);
+  assert.equal(graphText.includes("open these files"), false);
   assert.equal("sourceIncluded" in graphPayload, false);
   assert.equal("files" in graphPayload, false);
   assert.ok(
@@ -190,8 +191,8 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
   assert.equal(typo.result.structuredContent.hits.length, 0);
   assert.equal(typo.result.content[0].text.split("\n")[0].includes("[fuzzy]"), false);
   assert.match(typo.result.content[0].text, /0 matches/);
-  assert.match(typo.result.content[0].text, /pass regex: true/);
-  assert.match(typo.result.content[0].text, /fuzzy: true/);
+  assert.equal(typo.result.content[0].text.includes("regex"), false);
+  assert.match(typo.result.content[0].text, /fuzzy:true/);
 
   const approximate = await waitFor(messages, (message) => message.id === 8, 30_000);
   assert.equal("mode" in approximate.result.structuredContent, false);

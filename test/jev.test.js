@@ -211,8 +211,8 @@ test("grep preserveOrder keeps Jev sequence on the map", () => {
       },
     ],
   });
-  const defAt = formatted.text.indexOf("src/pkg/foo.py:14:1");
-  const testAt = formatted.text.indexOf("src/pkg/foo_test.py:8:1");
+  const defAt = formatted.text.indexOf("src/pkg/foo.py:14");
+  const testAt = formatted.text.indexOf("src/pkg/foo_test.py:8");
   assert.ok(defAt > 0 && testAt > defAt, formatted.text);
   assert.equal(formatted.text.includes("Jev"), false);
   assert.equal(formatted.text.includes("noul"), false);

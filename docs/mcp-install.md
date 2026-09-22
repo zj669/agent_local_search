@@ -2,9 +2,9 @@
 
 MCP install for Claude Code, Codex, Gemini CLI, Cursor, 反重力 (`agy`), and OpenCode.
 
-包版本钉 **`@zj669/codeq@0.3.0`**。stdio 同时吃 LSP `Content-Length` 和 NDJSON，**不要再套一层 Python / bash 夹层**。Cursor 用官方包装器 `codeq-mcp`（只钉 Node 22.5–24、躲开 npx）；其它客户端用 `codeq mcp`。不要发明第二个包装器。
+包版本钉 **`@zj669/codeq@0.3.1`**。stdio 同时吃 LSP `Content-Length` 和 NDJSON，**不要再套一层 Python / bash 夹层**。Cursor 用官方包装器 `codeq-mcp`（只钉 Node 22.5–24、躲开 npx）；其它客户端用 `codeq mcp`。不要发明第二个包装器。
 
-下列安装命令在 2026-09-22 的 Linux VM 上对 **0.2.11** 跑过。**0.3.0** 的 MCP 入口没变（仍是 `codeq mcp` / `codeq-mcp`）；相对 `path` 接到这次选中的 `root`。0.3.0 是 breaking：回包是 locator（没有 `detail:"full"`），grep 默认字面匹配。请装 0.3.0。
+下列安装命令在 2026-09-22 的 Linux VM 上对 **0.2.11** 跑过。**0.3.1** 的 MCP 入口没变（仍是 `codeq mcp` / `codeq-mcp`）；相对 `path` 接到这次选中的 `root`。0.3.0 起回包是 locator（没有 `detail:"full"`），grep 默认字面匹配；0.3.1 把 miss 的伪入口砍掉并压缩 schema/地图。请装 0.3.1。
 
 ## 结论
 
@@ -28,7 +28,7 @@ Node：包装器 `codeq-mcp` 要求 **Node `>=22.5 <25`**（不要 26）。
 
 ```bash
 node -v    # 例如 v22.22.2；需要 22.5–24.x
-npm i -g @zj669/codeq@0.3.0
+npm i -g @zj669/codeq@0.3.1
 which codeq
 which codeq-mcp
 ```
@@ -90,7 +90,7 @@ no workspace (spawned from home). Pass path or root to a repository on this call
 { "query": "bar.py", "path": "/abs/path/to/B" }
 ```
 
-回包第一行会写 `[ready] root … via root argument` 或 `via path argument` 或 `via cwd (roots/list)`。对不上就再带 `root`。默认回包是 bounded locations（graph 的 `entries`/`callees`，grep 的 `hits`，find 的 `paths`），没有源码、没有 `detail`。grep 默认字面匹配，需要正则时显式 `regex: true`；翻页用绑定本次搜索的 opaque `cursor`。
+回包第一行会写 `[ready] root … via root argument` 或 `via path argument` 或 `via cwd:roots/list`。对不上就再带 `root`。默认回包是 bounded locations（graph 的 `entries`/`callees`，grep 的 `hits`，find 的 `paths`），没有源码、没有 `detail`。grep 默认字面匹配，需要正则时显式 `regex: true`；翻页用绑定本次搜索的 opaque `cursor`。
 
 **不要：**
 
