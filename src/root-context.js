@@ -14,6 +14,7 @@ import { assertGrepPattern } from "./grep-mode.js";
 import { acquireLock } from "./lock.js";
 import { FIND_CAP, GREP_CAP, pageLimit } from "./limits.js";
 import { rootBucket } from "./paths.js";
+import { planFindSearch, runFindSearch } from "./find-glob.js";
 
 const require = createRequire(import.meta.url);
 
@@ -297,12 +298,12 @@ export class RootContext {
 
   async find(query, options) {
     const finder = await this.fffPromise;
-    const scoped = options.constraint
-      ? `${options.constraint} ${query}`.trim()
-      : query;
-    const value = unwrap(
-      finder.fileSearch(scoped, { pageSize: pageLimit(options.limit, FIND_CAP) }),
-      "FFF file search failed",
+    const plan = planFindSearch(query, options.constraint);
+    const { value, globFallback } = runFindSearch(plan, (needle) =>
+      unwrap(
+        finder.fileSearch(needle, { pageSize: pageLimit(options.limit, FIND_CAP) }),
+        "FFF file search failed",
+      ),
     );
     return {
       ...this.metadata(),
@@ -317,6 +318,7 @@ export class RootContext {
         score: value.scores[index]?.total ?? null,
         matchType: value.scores[index]?.matchType ?? null,
       })),
+      ...(globFallback ? { globFallback } : {}),
     };
   }
 
@@ -411,6 +413,7 @@ export class RootContext {
     return {
       ...this.metadata(),
       query,
+      constraint: options.constraint || null,
       result: text,
       symbols,
     };

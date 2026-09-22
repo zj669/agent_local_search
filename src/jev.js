@@ -140,7 +140,19 @@ export function extractCandidates(command, request, result) {
         endLine: callee.endLine,
       }),
     }));
-    return [...entries, ...callees];
+    const callers = map.callers.map((caller, index) => ({
+      index: entries.length + callees.length + index,
+      kind: "caller",
+      pinned: false,
+      anchor: `${caller.path}:${caller.line}`,
+      record: compact({
+        name: caller.name,
+        path: caller.path,
+        line: caller.line,
+        endLine: caller.endLine,
+      }),
+    }));
+    return [...entries, ...callees, ...callers];
   }
   return [];
 }
@@ -188,6 +200,9 @@ function applyRanking(command, result, candidates, ranked) {
         .map((item) => item.anchor),
       calleeOrder: ordered
         .filter((item) => item.kind === "callee")
+        .map((item) => item.anchor),
+      callerOrder: ordered
+        .filter((item) => item.kind === "caller")
         .map((item) => item.anchor),
     };
   }

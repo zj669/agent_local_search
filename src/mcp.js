@@ -58,7 +58,7 @@ const TOOLS = [
         query: {
           type: "string",
           description:
-            "Path fragment, matched fuzzily (foo.py, profiles/app, SKILL.md). Not a glob: **/*profile* matches nothing, pass profile. Dotfiles are indexed.",
+            "Path fragment, matched fuzzily (foo.py, profiles/app, SKILL.md). Not a glob: pass profile, not **/*profile*. Dotfiles are indexed.",
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
@@ -72,6 +72,13 @@ const TOOLS = [
       properties: {
         ...LOCATOR_SCHEMA,
         paths: { type: "array", items: { type: "string" } },
+        globFallback: {
+          type: "object",
+          properties: {
+            from: { type: "string" },
+            to: { type: "string" },
+          },
+        },
       },
       required: ["status", "root", "truncated", "paths"],
     },
@@ -150,7 +157,7 @@ const TOOLS = [
     name: "graph",
     title: "Explore the code graph",
     description:
-      'Identifiers or short "how does X work". Returns an entry span and direct callees, not an answer or source. Read the entry first; follow callees only as needed. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.',
+      'Identifiers or short "how does X work". Returns an entry span, direct callees, and direct callers, not an answer or source. Read the entry first; follow callees/callers only as needed. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.',
     inputSchema: {
       type: "object",
       properties: {
@@ -188,6 +195,20 @@ const TOOLS = [
           type: "array",
           description:
             "Direct callees of the reading entries: name, file, and definition line.",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              path: { type: "string" },
+              line: { type: "integer" },
+              endLine: { type: "integer" },
+            },
+          },
+        },
+        callers: {
+          type: "array",
+          description:
+            "Direct callers of the reading entries: name, file, and definition line.",
           items: {
             type: "object",
             properties: {

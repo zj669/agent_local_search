@@ -1,4 +1,4 @@
-import { CALLEE_CAP, ENTRY_CAP } from "./limits.js";
+import { CALLEE_CAP, CALLER_CAP, ENTRY_CAP } from "./limits.js";
 
 const FILE_SECTION = /^\*\*`([^`]+)`\*\*(?:\s+—\s+(.*))?$/;
 const BLAST_LINE = /^- `([^`]+)`\s+\(([^()]+?):(\d+)\)\s+—\s+(.*)$/;
@@ -28,6 +28,23 @@ const RELATION_KINDS = new Set([
   "export",
   "contains",
 ]);
+
+export const DEFINITION_KINDS = new Set([
+  "function",
+  "method",
+  "class",
+  "struct",
+  "interface",
+  "trait",
+  "protocol",
+  "enum",
+  "type_alias",
+  "constant",
+  "variable",
+  "component",
+]);
+
+const TEST_PATH = /(^|\/)tests?(\/|$)|_test\.|spec\.|__tests__/;
 
 const STOP_WORDS = new Set([
   "a",
@@ -70,6 +87,24 @@ const STOP_WORDS = new Set([
   "work",
   "works",
 ]);
+
+export function kindRank(kind) {
+  if (kind === "function" || kind === "method") return 0;
+  if (kind === "class") return 1;
+  return 2;
+}
+
+export function isTestPath(filePath) {
+  return TEST_PATH.test(String(filePath || "").replace(/\\/g, "/"));
+}
+
+export function inPathScope(filePath, constraint) {
+  if (!constraint) return true;
+  const path = String(filePath || "").replace(/\\/g, "/");
+  const scope = String(constraint).replace(/\\/g, "/").replace(/\/$/, "");
+  if (!scope || scope === ".") return true;
+  return path === scope || path.startsWith(`${scope}/`);
+}
 
 export function queryIdentifiers(query) {
   const tokens = String(query || "").match(/[A-Za-z_][A-Za-z0-9_$]*/g) || [];
@@ -293,85 +328,159 @@ export function applyOrder(items, order, keyOf) {
   return out;
 }
 
-function symbolMap(symbols) {
-  const byName = new Map();
-  for (const span of symbols || []) {
-    if (!span?.name) continue;
-    const key = span.name.toLowerCase();
-    if (!byName.has(key)) byName.set(key, span);
-  }
-  return byName;
-}
-
 function entryKey(entry) {
   return `${entry.symbol}\0${entry.path}\0${entry.startLine}`;
 }
 
-export function resolveEntries(dump, identifiers, symbols = []) {
-  const byName = symbolMap(symbols);
+function matchSpan(symbols, hit) {
+  const key = String(hit.symbol || "").toLowerCase();
+  const matches = (symbols || []).filter(
+    (span) => span?.name && span.name.toLowerCase() === key,
+  );
+  if (matches.length === 0) return null;
+  if (hit.path && hit.line) {
+    const exact = matches.find(
+      (span) => span.path === hit.path && span.startLine === hit.line,
+    );
+    if (exact) return exact;
+    const containing = matches
+      .filter(
+        (span) =>
+          span.path === hit.path &&
+          span.startLine <= hit.line &&
+          (span.endLine || span.startLine) >= hit.line,
+      )
+      .sort(
+        (a, b) =>
+          (a.endLine || a.startLine) -
+          a.startLine -
+          ((b.endLine || b.startLine) - b.startLine),
+      );
+    if (containing[0]) return containing[0];
+  }
+  if (hit.path) {
+    const byPath = matches.find((span) => span.path === hit.path);
+    if (byPath) return byPath;
+  }
+  return matches[0];
+}
+
+function toEntry(span, hit = null) {
+  const symbol = span?.name || hit?.symbol;
+  const path = span?.path || hit?.path;
+  const startLine = span?.startLine || hit?.line;
+  return {
+    symbol,
+    path,
+    startLine,
+    endLine: span?.endLine || span?.startLine || hit?.line,
+    kind: span?.kind || null,
+    pinned: true,
+    callees: span?.callees || [],
+    callers: span?.callers || [],
+  };
+}
+
+function extraDefinitionRank(a, b) {
+  const test = Number(isTestPath(a.path)) - Number(isTestPath(b.path));
+  if (test) return test;
+  const byKind = kindRank(a.kind) - kindRank(b.kind);
+  if (byKind) return byKind;
+  const byPath = String(a.path).localeCompare(String(b.path));
+  if (byPath) return byPath;
+  return (a.startLine || 0) - (b.startLine || 0);
+}
+
+export function resolveEntries(dump, identifiers, symbols = [], constraint = null) {
   const hits = exactHits(dump, identifiers, ENTRY_CAP);
   const entries = [];
   const seen = new Set();
-  const push = (entry) => {
+  const used = new Set();
+  const push = (entry, span) => {
+    if (!inPathScope(entry.path, constraint)) return;
     if (!entry?.path || !entry.startLine) return;
     const key = entryKey(entry);
     if (seen.has(key)) return;
     seen.add(key);
     entries.push(entry);
+    if (span) used.add(span);
   };
 
   for (const hit of hits) {
-    const span = byName.get(hit.symbol.toLowerCase());
-    push({
-      symbol: span?.name || hit.symbol,
-      path: span?.path || hit.path,
-      startLine: span?.startLine || hit.line,
-      endLine: span?.endLine || span?.startLine || hit.line,
-      kind: span?.kind || null,
-      pinned: true,
-      callees: span?.callees || [],
-    });
+    const span = matchSpan(symbols, hit);
+    push(toEntry(span, hit), span);
   }
-  // No exact hit: do not promote engine-ranked spans into reading entries.
-  // Those locations are not this query's next Read.
+
+  const wanted = new Set(identifiers.map((name) => name.toLowerCase()));
+  const extras = [];
+  for (const span of symbols || []) {
+    if (!span?.name || used.has(span)) continue;
+    if (!wanted.has(span.name.toLowerCase())) continue;
+    if (!DEFINITION_KINDS.has(span.kind)) continue;
+    if (!inPathScope(span.path, constraint)) continue;
+    extras.push(span);
+  }
+  extras.sort(extraDefinitionRank);
+  for (const span of extras) {
+    if (entries.length >= ENTRY_CAP) break;
+    push(toEntry(span), span);
+  }
   return entries.slice(0, ENTRY_CAP);
 }
 
-export function collectCallees(entries, cap = CALLEE_CAP) {
+function collectLocators(entries, field, cap) {
   const seen = new Set();
-  const callees = [];
+  const items = [];
   for (const entry of entries) {
-    for (const callee of entry.callees || []) {
-      if (!callee?.name || !callee.path || !callee.line) continue;
-      const key = `${callee.name}\0${callee.path}\0${callee.line}`;
+    for (const item of entry[field] || []) {
+      if (!item?.name || !item.path || !item.line) continue;
+      const key = `${item.name}\0${item.path}\0${item.line}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      callees.push({
-        name: callee.name,
-        path: callee.path,
-        line: callee.line,
-        endLine: callee.endLine,
-        text: callee.text,
+      items.push({
+        name: item.name,
+        path: item.path,
+        line: item.line,
+        endLine: item.endLine,
       });
     }
   }
-  return { shown: callees.slice(0, cap), hidden: callees.slice(cap) };
+  return { shown: items.slice(0, cap), hidden: items.slice(cap) };
+}
+
+export function collectCallees(entries, cap = CALLEE_CAP) {
+  return collectLocators(entries, "callees", cap);
+}
+
+export function collectCallers(entries, cap = CALLER_CAP) {
+  return collectLocators(entries, "callers", cap);
 }
 
 export function neighborhood(result) {
   const dump = parseExploreDump(result.result);
   const identifiers = queryIdentifiers(result.query);
-  const resolved = resolveEntries(dump, identifiers, result.symbols);
+  const resolved = resolveEntries(
+    dump,
+    identifiers,
+    result.symbols,
+    result.constraint,
+  );
   const entries = applyOrder(
     resolved,
     result.entryOrder,
     (entry) => `${entry.path}:${entry.startLine}`,
   );
-  const collected = collectCallees(entries);
+  const collectedCallees = collectCallees(entries);
+  const collectedCallers = collectCallers(entries);
   const callees = applyOrder(
-    collected.shown,
+    collectedCallees.shown,
     result.calleeOrder,
     (callee) => `${callee.path}:${callee.line}`,
+  );
+  const callers = applyOrder(
+    collectedCallers.shown,
+    result.callerOrder,
+    (caller) => `${caller.path}:${caller.line}`,
   );
   return {
     dump,
@@ -379,7 +488,9 @@ export function neighborhood(result) {
     hits: exactHits(dump, identifiers),
     entries,
     callees,
-    hiddenCallees: collected.hidden,
+    callers,
+    hiddenCallees: collectedCallees.hidden,
+    hiddenCallers: collectedCallers.hidden,
     extraFiles: Math.max(0, dump.files.length - entries.length),
   };
 }

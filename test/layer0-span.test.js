@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createFramedParser, encodeMessage } from "../src/mcp.js";
-import { directCalleeNodes, pickDefinition, symbolIndex } from "../src/symbol-index.js";
+import { directCalleeNodes, directCallerNodes, pickDefinition, symbolIndex } from "../src/symbol-index.js";
 
 const bin = fileURLToPath(new URL("../bin/codeq.js", import.meta.url));
 
@@ -115,7 +115,26 @@ test("direct callees are calls only, and each callee once", () => {
   );
 });
 
-test("symbolIndex reads a span and a one-line callee body from the graph", async () => {
+test("direct callers are calls only, and each caller once", () => {
+  const nodes = {
+    self: { id: "self", name: "render_widget", filePath: "src/pkg/widget.py", startLine: 14 },
+    show: { id: "show", name: "show", filePath: "src/pkg/widget.py", startLine: 25 },
+    boot: { id: "boot", name: "boot", filePath: "src/pkg/main.py", startLine: 3 },
+  };
+  const edges = [
+    { kind: "calls", source: "show" },
+    { kind: "calls", source: "show" },
+    { kind: "calls", source: "boot" },
+    { kind: "references", source: "boot" },
+  ];
+  const callers = directCallerNodes(nodes.self, edges, (id) => nodes[id]);
+  assert.deepEqual(
+    callers.map((node) => node.name),
+    ["show", "boot"],
+  );
+});
+
+test("symbolIndex maps callees and callers without getCode", () => {
   const nodes = [
     {
       id: "render",
@@ -141,30 +160,111 @@ test("symbolIndex reads a span and a one-line callee body from the graph", async
       startLine: 1,
       endLine: 2,
     },
+    {
+      id: "show",
+      kind: "method",
+      name: "show",
+      filePath: "src/pkg/widget.py",
+      startLine: 25,
+      endLine: 27,
+    },
   ];
   const byName = { render_widget: [nodes[0]] };
   const byId = Object.fromEntries(nodes.map((node) => [node.id, node]));
+  let coded = 0;
   const graph = {
     getNodesByName: (name) => byName[name] || [],
     getOutgoingEdges: () => [
       { kind: "calls", target: "shade" },
       { kind: "calls", target: "paint" },
     ],
+    getIncomingEdges: () => [{ kind: "calls", source: "show" }],
     getNode: (id) => byId[id],
-    getCode: async (id) => (id === "shade" ? "def shade(color): return color" : "def paint(status):\n    return status"),
+    getCode: async () => {
+      coded += 1;
+      return "def shade(color): return color";
+    },
   };
-  const symbols = await symbolIndex(
-    graph,
-    "how does render_widget work",
-    "- `render_widget` (src/pkg/widget.py:14) — 1 caller in `src/pkg/widget.py`",
-  );
+  const symbols = symbolIndex(graph, "how does render_widget work");
+  assert.equal(coded, 0);
   assert.equal(symbols.length, 1);
   assert.deepEqual(
     [symbols[0].startLine, symbols[0].endLine],
     [14, 22],
   );
-  assert.equal(symbols[0].callees[0].text, "def shade(color): return color");
-  assert.equal(symbols[0].callees[1].text, undefined);
+  assert.equal(symbols[0].callees[0].text, undefined);
+  assert.deepEqual(
+    symbols[0].callees.map((callee) => callee.name),
+    ["shade", "paint"],
+  );
+  assert.deepEqual(
+    symbols[0].callers.map((caller) => caller.name),
+    ["show"],
+  );
+});
+
+test("symbolIndex keeps every exact-name definition in scope and drops the rest", () => {
+  const nodes = [
+    {
+      id: "a",
+      kind: "function",
+      name: "dispatch",
+      filePath: "src/pkg/a.py",
+      startLine: 1,
+      endLine: 4,
+    },
+    {
+      id: "b",
+      kind: "function",
+      name: "dispatch",
+      filePath: "src/pkg/b.py",
+      startLine: 8,
+      endLine: 12,
+    },
+    {
+      id: "out",
+      kind: "function",
+      name: "dispatch",
+      filePath: "src/other/dispatch.py",
+      startLine: 2,
+      endLine: 6,
+    },
+    {
+      id: "ref",
+      kind: "calls",
+      name: "dispatch",
+      filePath: "src/pkg/a.py",
+      startLine: 20,
+      endLine: 20,
+    },
+    {
+      id: "short",
+      kind: "function",
+      name: "full",
+      filePath: "src/pkg/short.py",
+      startLine: 1,
+      endLine: 2,
+    },
+  ];
+  const graph = {
+    getNodesByName: (name) =>
+      name === "dispatch" ? nodes.filter((node) => node.name === "dispatch") : [nodes[4]],
+    getOutgoingEdges: () => [],
+    getIncomingEdges: () => [],
+    getNode: () => null,
+    getCode: async () => {
+      throw new Error("getCode should not run");
+    },
+  };
+  const symbols = symbolIndex(graph, "dispatch path:src/pkg");
+  assert.deepEqual(
+    symbols.map((span) => span.path),
+    ["src/pkg/a.py", "src/pkg/b.py"],
+  );
+  assert.equal(
+    symbols.some((span) => span.name === "full"),
+    false,
+  );
 });
 
 test(
@@ -279,6 +379,7 @@ test(
     assert.equal(map.text.includes("def shade(color): return color"), false);
     assert.equal(map.text.includes('return status or "plain"'), false);
     assert.equal(map.text.includes("```"), false);
+    assert.equal(Array.isArray(map.payload.callers), true);
 
     const grep = await call("grep", { root: repo, pattern: "status" });
     assert.equal(grep.isError, false, grep.text);

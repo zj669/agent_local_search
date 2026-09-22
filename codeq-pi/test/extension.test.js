@@ -126,6 +126,8 @@ test("factory registers grep, find, and graph only, without querying", async () 
   assert.match(pi.tools[0].description, /not Pi's builtin fd/);
   assert.match(pi.tools[1].description, /not Pi's builtin rg/);
   assert.match(pi.tools[1].description, /literal string/);
+  assert.match(pi.tools[2].description, /direct callees, and direct callers/);
+  assert.match(pi.tools[2].description, /There is no callers tool/);
   assert.equal(Boolean(pi.tools[1].parameters.properties.regex), true);
   assert.equal(Boolean(pi.tools[1].parameters.properties.cursor), true);
   assert.equal(Boolean(pi.tools[1].parameters.properties.context), false);

@@ -836,6 +836,7 @@ test("tool descriptions say when to pass root and how to shape a query", async (
     assert.match(tools.find.description, /not a glob/i);
     assert.match(tools.graph.description, /not an answer or source/);
     assert.match(tools.graph.description, /Read the entry first/);
+    assert.match(tools.graph.description, /direct callees, and direct callers/);
     assert.match(tools.graph.description, /There is no callers tool/);
     assert.match(
       tools.grep.inputSchema.properties.pattern.description,
@@ -846,6 +847,8 @@ test("tool descriptions say when to pass root and how to shape a query", async (
       /a multi-paragraph question does not/,
     );
     assert.equal(Boolean(tools.graph.outputSchema.properties.entries), true);
+    assert.equal(Boolean(tools.graph.outputSchema.properties.callees), true);
+    assert.equal(Boolean(tools.graph.outputSchema.properties.callers), true);
     assert.equal(Boolean(tools.graph.outputSchema.properties.exactHits), false);
     assert.equal(Boolean(tools.grep.outputSchema.properties.nextCursor), true);
   });
@@ -1081,7 +1084,7 @@ test("README default MCP snippet is the wrapper, no npx, no cwd field", () => {
   assert.equal(firstSnippet.includes("CODEQ_CWD"), false);
   assert.match(readme, /npx steals stdin/);
   assert.match(readme, /codeq-mcp/);
-  assert.match(readme, /@zj669\/codeq@0\.3\.1/);
+  assert.match(readme, new RegExp(`@zj669\\/codeq@${version.replaceAll(".", "\\.")}`));
   assert.match(readme, /docs\/mcp-install\.md/);
   assert.equal(readme.includes("leagent"), false);
   assert.equal(readme.includes("npx -y"), false);
@@ -1092,7 +1095,7 @@ test("repo MCP install guide covers harness clients without a second wrapper", (
     join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "mcp-install.md"),
     "utf8",
   );
-  assert.match(guide, /@zj669\/codeq@0\.3\.1/);
+  assert.match(guide, new RegExp(`@zj669\\/codeq@${version.replaceAll(".", "\\.")}`));
   assert.match(
     guide,
     /claude mcp add --scope user --transport stdio codeq -- codeq mcp/,

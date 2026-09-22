@@ -4,6 +4,8 @@ import {
   formatMcpToolResult,
   freshnessLine,
   rootOrigin,
+  CALLEE_CAP,
+  CALLER_CAP,
 } from "../src/mcp-format.js";
 import { parseExploreDump, queryIdentifiers } from "../src/graph-map.js";
 
@@ -76,6 +78,9 @@ const graphResult = {
           endLine: 4,
           text: "function ready() { return true; }",
         },
+      ],
+      callers: [
+        { name: "boot", path: "src/main.ts", line: 8, endLine: 12 },
       ],
     },
   ],
@@ -175,6 +180,9 @@ test("graph is a locator map: no source, no engine self-description", () => {
   assert.equal(text.split("src/app.ts:252-270 send").length - 1, 1);
   assert.match(text, /^src\/session\.ts:4 ready$/m);
   assert.equal(text.includes("function ready()"), false);
+  assert.ok(text.indexOf("\ncallees\n") < text.indexOf("\ncallers\n"), text);
+  assert.match(text, /^callers$/m);
+  assert.match(text, /^src\/main\.ts:8-12 boot$/m);
 
   const payload = formatted.structuredContent;
   assert.equal(payload.truncated, false);
@@ -188,6 +196,10 @@ test("graph is a locator map: no source, no engine self-description", () => {
   assert.deepEqual(
     payload.callees.map((callee) => callee.name),
     ["send", "ready"],
+  );
+  assert.deepEqual(
+    payload.callers.map((caller) => caller.name),
+    ["boot"],
   );
 });
 
@@ -206,6 +218,7 @@ test("graph anchored miss does not list a fake entry", () => {
   assert.equal(formatted.text.includes("engine ranked these instead"), false);
   assert.deepEqual(formatted.structuredContent.entries, []);
   assert.deepEqual(formatted.structuredContent.callees, []);
+  assert.deepEqual(formatted.structuredContent.callers, []);
   assert.equal(formatted.structuredContent.truncated, false);
 });
 
@@ -290,6 +303,7 @@ test("graph miss without identifiers does not invent a locator", () => {
   assert.match(formatted.text, /next: query an identifier or "how does X work"/);
   assert.deepEqual(formatted.structuredContent.entries, []);
   assert.deepEqual(formatted.structuredContent.callees, []);
+  assert.deepEqual(formatted.structuredContent.callers, []);
 });
 
 test("graph does not coach a wider map in the reply", () => {
@@ -485,6 +499,26 @@ test("find says glob syntax is not how find works only on a miss", () => {
   assert.equal(hit.text.includes("path fragment"), false);
 });
 
+test("find marks a glob fallback when the daemon retried a fragment", () => {
+  const formatted = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "**/*blueprint*",
+    total: 2,
+    globFallback: { from: "**/*blueprint*", to: "blueprint" },
+    results: [
+      { path: "src/blueprint.ts", matchType: "fuzzy" },
+      { path: "docs/blueprint.md", matchType: "fuzzy" },
+    ],
+  });
+  assert.match(formatted.text, /query looked like a glob; searched "blueprint"/);
+  assert.equal(formatted.text.includes("try \"blueprint\""), false);
+  assert.deepEqual(formatted.structuredContent.globFallback, {
+    from: "**/*blueprint*",
+    to: "blueprint",
+  });
+});
+
 test("find truncation does not mention the page cap", () => {
   const formatted = formatMcpToolResult("find", {
     status: "ready",
@@ -528,4 +562,196 @@ test("query identifiers drop the prose around them", () => {
     "formatMcpToolResult",
   ]);
   assert.equal(freshnessLine({ status: "ready" }), "[ready]");
+  assert.equal(CALLEE_CAP, 4);
+  assert.equal(CALLER_CAP, 4);
+});
+
+test("graph dump miss still pins an exact-name definition from the index", () => {
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    query: "how does full_dispatch_request work",
+    result: [
+      "Found 40 symbols across 2 files.",
+      "",
+      "- `full` (src/pkg/short.py:1) — FTS leftover",
+      "",
+      "**`src/pkg/short.py`** — full(function), dispatch(calls)",
+    ].join("\n"),
+    symbols: [
+      {
+        name: "full_dispatch_request",
+        kind: "function",
+        path: "src/pkg/dispatch.py",
+        startLine: 40,
+        endLine: 88,
+        callees: [{ name: "send", path: "src/pkg/send.py", line: 2, endLine: 4 }],
+        callers: [{ name: "handle", path: "src/pkg/api.py", line: 10, endLine: 20 }],
+      },
+      {
+        name: "full",
+        kind: "function",
+        path: "src/pkg/short.py",
+        startLine: 1,
+        endLine: 2,
+        callees: [],
+        callers: [],
+      },
+    ],
+  });
+  assert.match(formatted.text, /exact full_dispatch_request/);
+  assert.match(formatted.text, /^src\/pkg\/dispatch\.py:40-88 full_dispatch_request$/m);
+  assert.equal(formatted.text.includes("NO exact hit"), false);
+  assert.equal(formatted.structuredContent.entries[0].symbol, "full_dispatch_request");
+  assert.equal(
+    formatted.structuredContent.entries.some((entry) => entry.symbol === "full"),
+    false,
+  );
+  assert.deepEqual(
+    formatted.structuredContent.callees.map((callee) => callee.name),
+    ["send"],
+  );
+  assert.deepEqual(
+    formatted.structuredContent.callers.map((caller) => caller.name),
+    ["handle"],
+  );
+});
+
+test("graph dump miss with no exact-name definition stays empty and points at grep", () => {
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    query: "how does missing_identifier work",
+    symbols: [
+      {
+        name: "createSession",
+        kind: "function",
+        path: "src/session.ts",
+        startLine: 12,
+        endLine: 40,
+        callees: [{ name: "send", path: "src/app.ts", line: 252, endLine: 270 }],
+        callers: [{ name: "boot", path: "src/main.ts", line: 8, endLine: 12 }],
+      },
+    ],
+  });
+  assert.match(formatted.text, /NO exact hit on missing_identifier/);
+  assert.match(formatted.text, /next: grep missing_identifier/);
+  assert.deepEqual(formatted.structuredContent.entries, []);
+  assert.deepEqual(formatted.structuredContent.callees, []);
+  assert.deepEqual(formatted.structuredContent.callers, []);
+});
+
+test("graph does not promote relation-only or out-of-scope same-name nodes", () => {
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    query: "render_widget",
+    constraint: "src/pkg/",
+    result: "Found 0 symbols across 0 files.\n",
+    symbols: [
+      {
+        name: "render_widget",
+        kind: "calls",
+        path: "src/pkg/widget.py",
+        startLine: 14,
+        endLine: 14,
+        callees: [],
+        callers: [],
+      },
+      {
+        name: "render_widget",
+        kind: "function",
+        path: "src/other/widget.py",
+        startLine: 2,
+        endLine: 9,
+        callees: [],
+        callers: [],
+      },
+      {
+        name: "render_widget",
+        kind: "function",
+        path: "src/pkg/widget.py",
+        startLine: 14,
+        endLine: 22,
+        callees: [],
+        callers: [],
+      },
+    ],
+  });
+  assert.deepEqual(
+    formatted.structuredContent.entries.map((entry) => entry.path),
+    ["src/pkg/widget.py"],
+  );
+});
+
+test("graph keeps multiple same-name definitions and deprioritizes tests", () => {
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    query: "dispatch",
+    result: "Found 0 symbols across 0 files.\n",
+    symbols: [
+      {
+        name: "dispatch",
+        kind: "function",
+        path: "test/dispatch_test.py",
+        startLine: 1,
+        endLine: 4,
+        callees: [],
+        callers: [],
+      },
+      {
+        name: "dispatch",
+        kind: "function",
+        path: "src/b.py",
+        startLine: 8,
+        endLine: 12,
+        callees: [],
+        callers: [],
+      },
+      {
+        name: "dispatch",
+        kind: "function",
+        path: "src/a.py",
+        startLine: 3,
+        endLine: 9,
+        callees: [],
+        callers: [],
+      },
+    ],
+  });
+  assert.deepEqual(
+    formatted.structuredContent.entries.map((entry) => entry.path),
+    ["src/a.py", "src/b.py", "test/dispatch_test.py"],
+  );
+});
+
+test("graph caps callers independently of callees", () => {
+  const callers = Array.from({ length: 7 }, (_, i) => ({
+    name: `caller${i}`,
+    path: `src/pkg/caller${i}.py`,
+    line: i + 1,
+    endLine: i + 2,
+  }));
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    symbols: [
+      {
+        name: "createSession",
+        kind: "function",
+        path: "src/session.ts",
+        startLine: 12,
+        endLine: 40,
+        callees: [
+          { name: "send", path: "src/app.ts", line: 252, endLine: 270 },
+        ],
+        callers,
+      },
+    ],
+  });
+  assert.match(formatted.text, /^src\/pkg\/caller0\.py:1-2 caller0$/m);
+  assert.match(formatted.text, /^src\/pkg\/caller3\.py:4-5 caller3$/m);
+  assert.equal(formatted.text.includes("caller4"), false);
+  assert.match(formatted.text, /\+3 callers omitted/);
+  assert.equal(formatted.structuredContent.callers.length, 4);
+  assert.equal(formatted.structuredContent.truncated, true);
+  assert.ok(
+    formatted.text.indexOf("\ncallees\n") < formatted.text.indexOf("\ncallers\n"),
+  );
 });
