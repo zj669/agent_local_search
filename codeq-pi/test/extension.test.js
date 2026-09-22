@@ -63,8 +63,8 @@ test("package is a Pi extension named @zj669/codeq-pi", () => {
   const pkg = JSON.parse(readSrc("package.json"));
   const cli = JSON.parse(readSrc("../package.json"));
   assert.equal(pkg.name, "@zj669/codeq-pi");
-  assert.equal(pkg.version, "0.3.6");
-  assert.equal(cli.version, "0.3.6");
+  assert.equal(pkg.version, "0.3.7");
+  assert.equal(cli.version, "0.3.7");
   assert.deepEqual(pkg.pi, { extensions: ["./src/index.ts"] });
   assert.equal(pkg.keywords.includes("pi-package"), true);
   assert.equal(pkg.dependencies["@zj669/codeq"], "file:..");
