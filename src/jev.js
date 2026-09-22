@@ -85,7 +85,7 @@ export function extractCandidates(command, request, result) {
     return (result.results || []).map((item, index) => ({
       index,
       kind: "find",
-      pinned: item.matchType === "exact",
+      pinned: pathTier(item.path) === 0 && item.matchType === "exact",
       anchor: item.path,
       record: compact({
         path: item.path,
@@ -191,8 +191,33 @@ function sortVisible(candidates, ranked) {
   return [...pinned, ...rest];
 }
 
+function sortGrepByTierThenNoul(candidates, ranked) {
+  const byIndex = new Map(ranked.map((item) => [item.index, item]));
+  const noulOf = (candidate) => byIndex.get(candidate.index)?.noul ?? 0;
+  const buckets = new Map();
+  for (const candidate of candidates) {
+    const tier = pathTier(candidate.record.path);
+    if (!buckets.has(tier)) buckets.set(tier, []);
+    buckets.get(tier).push(candidate);
+  }
+  const ordered = [];
+  for (const tier of [...buckets.keys()].sort((a, b) => a - b)) {
+    const bucket = buckets.get(tier);
+    bucket.sort((left, right) => {
+      const noul = noulOf(right) - noulOf(left);
+      if (noul !== 0) return noul;
+      return left.index - right.index;
+    });
+    ordered.push(...bucket);
+  }
+  return ordered;
+}
+
 function applyRanking(command, result, candidates, ranked) {
-  const ordered = sortVisible(candidates, ranked);
+  const ordered =
+    command === "grep"
+      ? sortGrepByTierThenNoul(candidates, ranked)
+      : sortVisible(candidates, ranked);
   if (command === "graph") {
     return {
       ...result,
@@ -219,7 +244,7 @@ function applyRanking(command, result, candidates, ranked) {
   return {
     ...result,
     results,
-    ...(command === "grep" ? { preserveOrder: true } : {}),
+    preserveOrder: true,
   };
 }
 
@@ -285,6 +310,20 @@ export function exactNeighborhoodSkip(command, request, result) {
   return candidates.length >= 1 && candidates.length <= JEV_CANDIDATE_CAP;
 }
 
+export function tierOrderSkip(command, request, result) {
+  if (command !== "find") return false;
+  const results = result?.results || [];
+  if (results.length < 2 || results.length > JEV_CANDIDATE_CAP) return false;
+  let sawProd = false;
+  let sawAux = false;
+  for (const item of results) {
+    if (pathTier(item.path) === 0) sawProd = true;
+    else sawAux = true;
+    if (sawProd && sawAux) return true;
+  }
+  return false;
+}
+
 export async function rerank(
   command,
   request,
@@ -334,6 +373,12 @@ export async function maybeRerank(command, request, result, options) {
     return withJev(
       { ...result, preserveOrder: true },
       { applied: false, skipped: "exact_neighborhood" },
+    );
+  }
+  if (tierOrderSkip(command, request, result)) {
+    return withJev(
+      { ...result, preserveOrder: true },
+      { applied: false, skipped: "tier_order" },
     );
   }
   try {

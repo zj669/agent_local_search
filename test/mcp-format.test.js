@@ -498,7 +498,7 @@ test("find replies are paths, not file metadata", () => {
   ]);
 });
 
-test("find pins exact path matches first without Jev", () => {
+test("find pins production exact path matches first without Jev", () => {
   const formatted = formatMcpToolResult("find", {
     status: "ready",
     root: "/repo",
@@ -512,8 +512,41 @@ test("find pins exact path matches first without Jev", () => {
   });
   assert.deepEqual(formatted.structuredContent.paths, [
     "src/pkg/foo.py",
-    "src/pkg/foo_test.py",
     "src/pkg/other.py",
+    "src/pkg/foo_test.py",
+  ]);
+});
+
+test("find formatter does not lift aux exact over production", () => {
+  const kept = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "git",
+    preserveOrder: true,
+    total: 2,
+    results: [
+      { path: "src/pkg/a.py", matchType: "fuzzy" },
+      { path: ".gitignore", matchType: "exact" },
+    ],
+  });
+  assert.deepEqual(kept.structuredContent.paths, [
+    "src/pkg/a.py",
+    ".gitignore",
+  ]);
+
+  const defensive = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "git",
+    total: 2,
+    results: [
+      { path: ".gitignore", matchType: "exact" },
+      { path: "src/pkg/a.py", matchType: "fuzzy" },
+    ],
+  });
+  assert.deepEqual(defensive.structuredContent.paths, [
+    "src/pkg/a.py",
+    ".gitignore",
   ]);
 });
 
@@ -535,7 +568,7 @@ test("find preserveOrder keeps daemon membership and order", () => {
     ".github/workflows/ci.yml",
     "src/pkg/foo.py",
   ]);
-  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|skipped/i.test(formatted.text), false);
+  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(formatted.text), false);
 });
 
 test("find says glob syntax is not how find works only on a miss without rewrite", () => {

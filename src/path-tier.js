@@ -111,19 +111,17 @@ export function isPreferredHit(hit, pattern) {
 }
 
 export function rankFindResults(results) {
-  const exact = [];
-  const rest = [];
-  for (const item of results || []) {
-    if (item.matchType === "exact") exact.push(item);
-    else rest.push(item);
-  }
-  const restOrder = rest.map((item, index) => ({ item, index }));
-  restOrder.sort((a, b) => {
-    const tier = pathTier(a.item.path) - pathTier(b.item.path);
-    if (tier) return tier;
+  const items = (results || []).map((item, index) => ({ item, index }));
+  items.sort((a, b) => {
+    const aTier = pathTier(a.item.path);
+    const bTier = pathTier(b.item.path);
+    if (aTier !== bTier) return aTier - bTier;
+    const aPin = aTier === 0 && a.item.matchType === "exact" ? 0 : 1;
+    const bPin = bTier === 0 && b.item.matchType === "exact" ? 0 : 1;
+    if (aPin !== bPin) return aPin - bPin;
     return a.index - b.index;
   });
-  return [...exact, ...restOrder.map((entry) => entry.item)];
+  return items.map((entry) => entry.item);
 }
 
 function orderHitsInFile(hits, pattern) {

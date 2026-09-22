@@ -11,9 +11,11 @@ import {
   prodShortlistSkip,
   rerank,
   skipReason,
+  tierOrderSkip,
 } from "../src/jev.js";
 import { neighborhood } from "../src/graph-map.js";
 import { formatMcpToolResult } from "../src/mcp-format.js";
+import { pathTier } from "../src/path-tier.js";
 
 const grepResult = {
   status: "ready",
@@ -140,6 +142,24 @@ const mixedDistGrepResult = {
       column: 1,
       text: "render_widget",
     },
+  ],
+};
+
+const allConfigFindResult = {
+  status: "ready",
+  query: "ci",
+  results: [
+    { path: ".github/workflows/ci.yml", matchType: "fuzzy" },
+    { path: ".editorconfig", matchType: "fuzzy" },
+  ],
+};
+
+const allDocsFindResult = {
+  status: "ready",
+  query: "guide",
+  results: [
+    { path: "docs/guide.md", matchType: "fuzzy" },
+    { path: "README.md", matchType: "fuzzy" },
   ],
 };
 
@@ -285,7 +305,7 @@ test("literal grep with a production vis16 skips the optional rerank", async () 
   assert.equal(ranked.preserveOrder, true);
   assert.deepEqual(ranked.results, prodGrepResult.results);
   const formatted = formatMcpToolResult("grep", ranked);
-  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|skipped/i.test(formatted.text), false);
+  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(formatted.text), false);
 });
 
 test("no key is still no_key on a production vis16", async () => {
@@ -322,10 +342,10 @@ test("find with an all-production vis16 skips the optional rerank", async () => 
   assert.equal(ranked.preserveOrder, true);
   assert.deepEqual(ranked.results, prodFindResult.results);
   const formatted = formatMcpToolResult("find", ranked);
-  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|skipped/i.test(formatted.text), false);
+  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(formatted.text), false);
 });
 
-test("regex, fuzzy, mixed-tier grep, mixed-config find, and dist vis16 still call the optional rerank", async () => {
+test("regex, fuzzy, mixed-tier grep, and dist grep vis16 still call the optional rerank", async () => {
   const calls = [];
   const systemOne = async (payload) => {
     calls.push(payload.state.request.tool);
@@ -350,14 +370,12 @@ test("regex, fuzzy, mixed-tier grep, mixed-config find, and dist vis16 still cal
     env,
     systemOne,
   });
-  await maybeRerank("find", { query: "ci" }, mixedConfigFindResult, { env, systemOne });
-  await maybeRerank("find", { query: "async" }, mixedDistFindResult, { env, systemOne });
   await maybeRerank("grep", { query: "render_widget" }, mixedDistGrepResult, {
     env,
     systemOne,
   });
 
-  assert.deepEqual(calls, ["grep", "grep", "grep", "grep", "find", "find", "grep"]);
+  assert.deepEqual(calls, ["grep", "grep", "grep", "grep", "grep"]);
   assert.equal(prodShortlistSkip("grep", { regex: true }, { ...prodGrepResult, mode: "regex" }), false);
   assert.equal(
     prodShortlistSkip("grep", { query: "render_widget" }, grepResult),
@@ -367,12 +385,11 @@ test("regex, fuzzy, mixed-tier grep, mixed-config find, and dist vis16 still cal
     prodShortlistSkip("grep", { query: "render_widget" }, mixedConfigGrepResult),
     false,
   );
-  assert.equal(prodShortlistSkip("find", { query: "ci" }, mixedConfigFindResult), false);
-  assert.equal(prodShortlistSkip("find", { query: "async" }, mixedDistFindResult), false);
   assert.equal(
     prodShortlistSkip("grep", { query: "render_widget" }, mixedDistGrepResult),
     false,
   );
+  assert.equal(tierOrderSkip("grep", { query: "render_widget" }, mixedDistGrepResult), false);
   assert.equal(
     prodShortlistSkip(
       "grep",
@@ -392,6 +409,61 @@ test("regex, fuzzy, mixed-tier grep, mixed-config find, and dist vis16 still cal
     ),
     false,
   );
+});
+
+test("mixed-tier find 2-16 skips with tier_order; all-config find still reranks", async () => {
+  let called = 0;
+  const systemOne = async (payload) => {
+    called += 1;
+    return stubAnswers(payload);
+  };
+  const env = { CODEQ_JEV_KEY: "x" };
+
+  assert.equal(prodShortlistSkip("find", { query: "ci" }, mixedConfigFindResult), false);
+  assert.equal(tierOrderSkip("find", { query: "ci" }, mixedConfigFindResult), true);
+  assert.equal(tierOrderSkip("find", { query: "async" }, mixedDistFindResult), true);
+  assert.equal(tierOrderSkip("find", { query: "foo.py" }, prodFindResult), false);
+  assert.equal(tierOrderSkip("find", { query: "ci" }, allConfigFindResult), false);
+  assert.equal(tierOrderSkip("find", { query: "guide" }, allDocsFindResult), false);
+  assert.equal(tierOrderSkip("grep", { query: "render_widget" }, mixedConfigGrepResult), false);
+
+  const mixed = await maybeRerank("find", { query: "ci" }, mixedConfigFindResult, {
+    env,
+    systemOne,
+  });
+  assert.equal(called, 0);
+  assert.deepEqual(mixed.jev, { applied: false, skipped: "tier_order" });
+  assert.equal(mixed.preserveOrder, true);
+  assert.deepEqual(mixed.results, mixedConfigFindResult.results);
+  const formatted = formatMcpToolResult("find", mixed);
+  assert.equal(
+    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(formatted.text),
+    false,
+  );
+
+  const dist = await maybeRerank("find", { query: "async" }, mixedDistFindResult, {
+    env,
+    systemOne,
+  });
+  assert.equal(called, 0);
+  assert.deepEqual(dist.jev, { applied: false, skipped: "tier_order" });
+  assert.deepEqual(dist.results, mixedDistFindResult.results);
+
+  const allConfig = await maybeRerank("find", { query: "ci" }, allConfigFindResult, {
+    env,
+    systemOne,
+  });
+  assert.equal(called, 1);
+  assert.equal(allConfig.jev.applied, true);
+  assert.equal(allConfig.jev.skipped, undefined);
+  assert.equal(allConfig.preserveOrder, true);
+
+  const allDocs = await maybeRerank("find", { query: "guide" }, allDocsFindResult, {
+    env,
+    systemOne,
+  });
+  assert.equal(called, 2);
+  assert.equal(allDocs.jev.applied, true);
 });
 
 test("graph exact neighborhood skips the optional rerank", async () => {
@@ -428,7 +500,7 @@ test("graph exact neighborhood skips the optional rerank", async () => {
   );
   const formatted = formatMcpToolResult("graph", ranked);
   assert.equal(
-    /jev|noul|prod_shortlist|exact_neighborhood|skipped/i.test(formatted.text),
+    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(formatted.text),
     false,
   );
   assert.match(formatted.text, /^callers: show src\/pkg\/widget\.py:25$/m);
@@ -491,10 +563,95 @@ test("find pins exact path matches above Noul", async () => {
   });
   assert.equal(ranked.results[0].path, "src/pkg/foo.py");
   assert.equal(ranked.results[0].matchType, "exact");
+  assert.equal(ranked.preserveOrder, true);
   assert.deepEqual(
     ranked.results.map((item) => item.path),
     ["src/pkg/foo.py", "src/pkg/other.py", "src/pkg/foo_test.py"],
   );
+});
+
+test("find pins only production exact matches", () => {
+  const candidates = extractCandidates(
+    "find",
+    { query: "git" },
+    {
+      results: [
+        { path: ".gitignore", matchType: "exact" },
+        { path: "src/foo.py", matchType: "exact" },
+        { path: "src/other.py", matchType: "fuzzy" },
+      ],
+    },
+  );
+  const byPath = Object.fromEntries(
+    candidates.map((item) => [item.record.path, item]),
+  );
+  assert.equal(byPath[".gitignore"].pinned, false);
+  assert.equal(byPath["src/foo.py"].pinned, true);
+  assert.equal(byPath["src/other.py"].pinned, false);
+});
+
+test("literal grep still calls Jev but does not undo pathTier across buckets", async () => {
+  const result = {
+    status: "ready",
+    root: "/repo",
+    pattern: "render_widget",
+    mode: "plain",
+    results: [
+      {
+        path: "src/pkg/foo.py",
+        line: 14,
+        column: 1,
+        text: "def render_widget():",
+      },
+      {
+        path: "src/pkg/bar.py",
+        line: 2,
+        column: 1,
+        text: "render_widget()",
+      },
+      {
+        path: "dist/async.js",
+        line: 4,
+        column: 1,
+        text: "render_widget",
+      },
+    ],
+  };
+  let called = 0;
+  const ranked = await maybeRerank("grep", { query: "render_widget" }, result, {
+    env: { CODEQ_JEV_KEY: "x" },
+    systemOne: async (payload) => {
+      called += 1;
+      const answers = {};
+      for (const key of Object.keys(payload.questions)) {
+        const index = Number(key.slice(1));
+        const anchors = Object.keys(payload.state.hits);
+        const anchor = anchors[index] || "";
+        answers[key] = {
+          type: "noul",
+          noul: anchor.includes("dist/")
+            ? 0.99
+            : anchor.includes("bar.py")
+              ? 0.8
+              : 0.1,
+        };
+      }
+      return { answers };
+    },
+  });
+  assert.equal(called, 1);
+  assert.equal(ranked.jev.applied, true);
+  assert.equal(ranked.preserveOrder, true);
+  const paths = ranked.results.map((hit) => hit.path);
+  const tiers = paths.map((filePath) => pathTier(filePath));
+  for (let index = 1; index < tiers.length; index += 1) {
+    assert.ok(tiers[index] >= tiers[index - 1], paths.join(" "));
+  }
+  assert.deepEqual(paths, [
+    "src/pkg/bar.py",
+    "src/pkg/foo.py",
+    "dist/async.js",
+  ]);
 });
 
 test("grep preserveOrder keeps Jev sequence on the map", () => {
