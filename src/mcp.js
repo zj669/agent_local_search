@@ -193,14 +193,14 @@ const TOOLS = [
     name: "graph",
     title: "Explore the code graph",
     description:
-      "Explore related symbols and files with CodeGraph explore. Returns a map of the code to read next, not a written answer: the query symbol's own span (start–end of that function or class, not the whole file) and its direct callees (name, file, line). Read that span; do not split a pipeline into one graph call per identifier. A query that names several symbols returns one wider map. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass root to query a different repository and path to narrow inside one. Each call uses exactly one root. The default reply is layer 0 and carries no source code; pass detail full for layer 1, which repeats the map and then adds source with the query's target file first.",
+      "Explore related symbols and files with CodeGraph explore. Use this for call chains and pipelines (tracing which functions run from an entry point): it returns the query symbol's own span (start–end of that function or class, not the whole file) and its direct callees (name, file, line) so you can walk the chain without Bash or one grep per hop. Returns a map of the code to read next, not a written answer. Read that span; do not split a pipeline into one graph call per identifier. A query that names several symbols returns one wider map. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass root to query a different repository and path to narrow inside one. Each call uses exactly one root. The default reply is layer 0 and carries no source code; pass detail full for layer 1, which repeats the map and then adds source with the query's target file first.",
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
           description:
-            'Identifiers, or "how does X work" where X is identifiers, for example "Widget render_widget" or "how does render_widget work". A query that names several identifiers returns one wider map — do not split it into one call per identifier. Identifier-shaped queries match the graph; a multi-paragraph question does not.',
+            'Identifiers, or "how does X work" where X is identifiers, for example "Widget render_widget", "how does render_widget work", or "how does handle work" after you learn the entry handler name. Use this for call-chain questions once you have one symbol to anchor on. A query that names several identifiers returns one wider map — do not split it into one call per identifier. Identifier-shaped queries match the graph; a multi-paragraph question does not.',
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
