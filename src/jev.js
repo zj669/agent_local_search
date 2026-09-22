@@ -1,5 +1,6 @@
 import { neighborhood } from "./graph-map.js";
 import { JEV_CANDIDATE_CAP, JEV_TIMEOUT_MS } from "./limits.js";
+import { pathTier } from "./path-tier.js";
 
 export { JEV_TIMEOUT_MS, JEV_CANDIDATE_CAP };
 
@@ -262,6 +263,21 @@ function withJev(result, jev) {
   return { ...result, jev };
 }
 
+function defaultLiteralGrep(request, result) {
+  if (request?.regex === true || request?.fuzzy === true) return false;
+  const mode = result?.mode;
+  if (mode === "regex" || mode === "fuzzy") return false;
+  return true;
+}
+
+export function prodShortlistSkip(command, request, result) {
+  if (command !== "grep") return false;
+  if (!defaultLiteralGrep(request, result)) return false;
+  const results = result?.results || [];
+  if (results.length === 0 || results.length > JEV_CANDIDATE_CAP) return false;
+  return results.every((item) => pathTier(item.path) === 0);
+}
+
 export async function rerank(
   command,
   request,
@@ -300,6 +316,12 @@ export async function maybeRerank(command, request, result, options) {
   }
   if (candidates.length > JEV_CANDIDATE_CAP) {
     return withJev(result, { applied: false, skipped: "too_many" });
+  }
+  if (prodShortlistSkip(command, request, result)) {
+    return withJev(
+      { ...result, preserveOrder: true },
+      { applied: false, skipped: "prod_shortlist" },
+    );
   }
   try {
     const next = await rerank(command, request, result, options);

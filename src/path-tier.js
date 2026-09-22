@@ -2,6 +2,8 @@ import { isTestPath } from "./graph-map.js";
 import { FIND_CAP, GREP_CAP, pageLimit } from "./limits.js";
 
 const DOCS_SEGMENT = /(^|\/)(docs?|documentation|examples?|samples?|tutorials?)(\/|$)/i;
+const AGENTS_SEGMENT = /(^|\/)\.agents(\/|$)/;
+const SKILL_BASENAME = /^skill(?:\.md)?$/i;
 
 function posixPath(filePath) {
   return String(filePath || "").replace(/\\/g, "/");
@@ -10,7 +12,9 @@ function posixPath(filePath) {
 export function isDocsPath(filePath) {
   const path = posixPath(filePath);
   if (DOCS_SEGMENT.test(path)) return true;
+  if (AGENTS_SEGMENT.test(path)) return true;
   const base = path.split("/").pop() || "";
+  if (SKILL_BASENAME.test(base)) return true;
   return /^readme(?:\..+)?$/i.test(base);
 }
 
@@ -74,26 +78,59 @@ export function rankFindResults(results) {
   return [...exact, ...restOrder.map((entry) => entry.item)];
 }
 
+function orderHitsInFile(hits, pattern) {
+  const preferred = hits
+    .filter((hit) => isPreferredHit(hit, pattern))
+    .sort((a, b) => a.line - b.line);
+  const rest = hits
+    .filter((hit) => !isPreferredHit(hit, pattern))
+    .sort((a, b) => a.line - b.line);
+  return [...preferred, ...rest];
+}
+
+function roundRobinFiles(groups) {
+  const queues = groups.map((group) => [...group.hits]);
+  const ordered = [];
+  let progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (const queue of queues) {
+      if (queue.length === 0) continue;
+      ordered.push(queue.shift());
+      progressed = true;
+    }
+  }
+  return ordered;
+}
+
 export function rankGrepHits(hits, pattern) {
   const groups = [];
-  const index = new Map();
+  const firstSeen = new Map();
   for (const hit of hits || []) {
-    if (!index.has(hit.path)) {
-      index.set(hit.path, groups.length);
+    if (!firstSeen.has(hit.path)) {
+      firstSeen.set(hit.path, groups.length);
       groups.push({ path: hit.path, hits: [] });
     }
-    groups[index.get(hit.path)].hits.push(hit);
+    groups[firstSeen.get(hit.path)].hits.push(hit);
   }
-  groups.sort((a, b) => pathTier(a.path) - pathTier(b.path));
-  const ordered = [];
   for (const group of groups) {
-    const preferred = group.hits
-      .filter((hit) => isPreferredHit(hit, pattern))
-      .sort((a, b) => a.line - b.line);
-    const rest = group.hits
-      .filter((hit) => !isPreferredHit(hit, pattern))
-      .sort((a, b) => a.line - b.line);
-    ordered.push(...preferred, ...rest);
+    group.hits = orderHitsInFile(group.hits, pattern);
+    group.tier = pathTier(group.path);
+  }
+  groups.sort((a, b) => {
+    const tier = a.tier - b.tier;
+    if (tier) return tier;
+    return firstSeen.get(a.path) - firstSeen.get(b.path);
+  });
+  const ordered = [];
+  let index = 0;
+  while (index < groups.length) {
+    let end = index + 1;
+    while (end < groups.length && groups[end].tier === groups[index].tier) {
+      end += 1;
+    }
+    ordered.push(...roundRobinFiles(groups.slice(index, end)));
+    index = end;
   }
   return ordered;
 }

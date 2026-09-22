@@ -44,7 +44,7 @@ export const DEFINITION_KINDS = new Set([
   "component",
 ]);
 
-const TEST_PATH = /(^|\/)tests?(\/|$)|_test\.|spec\.|__tests__/;
+const TEST_PATH = /(^|\/)tests?(\/|$)|_test\.|spec\.|__tests__|\.test\./;
 
 const STOP_WORDS = new Set([
   "a",

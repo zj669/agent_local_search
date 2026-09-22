@@ -7,6 +7,7 @@ import {
   jevEnabled,
   JEV_TIMEOUT_MS,
   maybeRerank,
+  prodShortlistSkip,
   rerank,
   skipReason,
 } from "../src/jev.js";
@@ -40,6 +41,33 @@ const grepResult = {
       line: 9,
       column: 1,
       text: 'def render_widget(name, theme="gray"):',
+    },
+  ],
+};
+
+const prodGrepResult = {
+  status: "ready",
+  root: "/repo",
+  pattern: "render_widget",
+  mode: "plain",
+  results: [
+    {
+      path: "src/pkg/foo.py",
+      line: 14,
+      column: 1,
+      text: "def render_widget(name, color, width=12):",
+    },
+    {
+      path: "src/ui/widget.py",
+      line: 9,
+      column: 1,
+      text: 'def render_widget(name, theme="gray"):',
+    },
+    {
+      path: "src/pkg/layout.py",
+      line: 3,
+      column: 1,
+      text: "def render_widget_box():",
     },
   ],
 };
@@ -147,6 +175,102 @@ test("fail-open returns the engine page on Jev errors", async () => {
   );
   assert.deepEqual(ranked.results, grepResult.results);
   assert.deepEqual(ranked.jev, { applied: false, skipped: "timeout" });
+});
+
+test("literal grep with a production vis16 skips the optional rerank", async () => {
+  let called = 0;
+  const systemOne = async () => {
+    called += 1;
+    throw new Error("should not call optional rerank");
+  };
+  assert.equal(prodShortlistSkip("grep", { query: "render_widget" }, prodGrepResult), true);
+  const ranked = await maybeRerank("grep", { query: "render_widget" }, prodGrepResult, {
+    env: { CODEQ_JEV_KEY: "x" },
+    systemOne,
+  });
+  assert.equal(called, 0);
+  assert.deepEqual(ranked.jev, { applied: false, skipped: "prod_shortlist" });
+  assert.equal(ranked.preserveOrder, true);
+  assert.deepEqual(ranked.results, prodGrepResult.results);
+  const formatted = formatMcpToolResult("grep", ranked);
+  assert.equal(/jev|noul|prod_shortlist|skipped/i.test(formatted.text), false);
+});
+
+test("no key is still no_key on a production vis16", async () => {
+  const ranked = await maybeRerank("grep", { query: "render_widget" }, prodGrepResult, {
+    env: {},
+    systemOne: async () => {
+      throw new Error("should not call optional rerank");
+    },
+  });
+  assert.deepEqual(ranked.jev, { applied: false, skipped: "no_key" });
+});
+
+test("regex, fuzzy, find, and mixed-tier grep still call the optional rerank", async () => {
+  const calls = [];
+  const systemOne = async (payload) => {
+    calls.push(payload.state.request.tool);
+    const answers = {};
+    for (const key of Object.keys(payload.questions)) {
+      answers[key] = { type: "noul", noul: 0.1 };
+    }
+    return { answers };
+  };
+  const env = { CODEQ_JEV_KEY: "x" };
+
+  await maybeRerank(
+    "grep",
+    { query: "render_widget", regex: true },
+    { ...prodGrepResult, mode: "regex" },
+    { env, systemOne },
+  );
+  await maybeRerank(
+    "grep",
+    { query: "render_widget", fuzzy: true },
+    { ...prodGrepResult, mode: "fuzzy" },
+    { env, systemOne },
+  );
+  await maybeRerank("grep", { query: "render_widget" }, grepResult, { env, systemOne });
+  await maybeRerank(
+    "find",
+    { query: "foo.py" },
+    {
+      status: "ready",
+      query: "foo.py",
+      results: [
+        { path: "src/pkg/foo.py", matchType: "exact" },
+        { path: "src/pkg/other.py", matchType: "fuzzy" },
+      ],
+    },
+    { env, systemOne },
+  );
+
+  assert.deepEqual(calls, ["grep", "grep", "grep", "find"]);
+  assert.equal(prodShortlistSkip("grep", { regex: true }, { ...prodGrepResult, mode: "regex" }), false);
+  assert.equal(
+    prodShortlistSkip("grep", { query: "render_widget" }, grepResult),
+    false,
+  );
+  assert.equal(prodShortlistSkip("find", { query: "foo.py" }, prodGrepResult), false);
+  assert.equal(
+    prodShortlistSkip(
+      "grep",
+      { query: "render_widget" },
+      {
+        mode: "plain",
+        results: [
+          { path: "src/pkg/foo.py", line: 1, column: 1, text: "def render_widget():" },
+          {
+            path: "library/src/actions/args/args.test.ts",
+            line: 11,
+            column: 1,
+            text: "render_widget()",
+          },
+        ],
+      },
+    ),
+    false,
+  );
 });
 
 test("skipReason maps HTTP and timeouts", () => {

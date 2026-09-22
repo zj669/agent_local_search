@@ -69,6 +69,25 @@ test("grep cursor mismatch, junk, and v1 tokens are errors, not page 1", () => {
     () => openGrepCursor(v1, search),
     (error) => error.message === GREP_CURSOR_ERROR,
   );
+  const v2 = Buffer.from(
+    JSON.stringify({
+      v: 2,
+      root: "/repo",
+      pattern: "TODO",
+      glob: "**/*.ts",
+      constraint: "src/",
+      regex: false,
+      fuzzy: false,
+      mode: "plain",
+      window: 0,
+      offset: 16,
+    }),
+    "utf8",
+  ).toString("base64url");
+  assert.throws(
+    () => openGrepCursor(v2, search),
+    (error) => error.message === GREP_CURSOR_ERROR,
+  );
   assert.equal(encodeGrepCursor(search, 0, 0), null);
 });
 
@@ -94,5 +113,5 @@ test("grep next cursor stays in the ranked window before following FFF", () => {
   const nextWindow = openGrepCursor(lastInWindow, search);
   assert.equal(nextWindow.offset, 0);
   assert.equal(nextWindow.window, 9001);
-  assert.equal(GREP_CURSOR_VERSION, 2);
+  assert.equal(GREP_CURSOR_VERSION, 3);
 });
