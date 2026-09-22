@@ -1,0 +1,220 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { extractCandidates, jevEnabled, maybeRerank, rerank } from "../src/jev.js";
+import { formatMcpToolResult } from "../src/mcp-format.js";
+
+const grepResult = {
+  status: "ready",
+  root: "/repo",
+  pattern: "render_widget",
+  mode: "plain",
+  shown: 3,
+  moreRemain: false,
+  results: [
+    {
+      path: "src/pkg/foo_test.py",
+      line: 8,
+      column: 1,
+      text: "def test_render_widget_includes_name():",
+    },
+    {
+      path: "src/pkg/foo.py",
+      line: 14,
+      column: 1,
+      text: "def render_widget(name, color, width=12):",
+      contextBefore: ["", ""],
+      contextAfter: [
+        '    """Paint a named widget onto the canvas."""',
+        "    boxed = layout(name, width)",
+      ],
+    },
+    {
+      path: "src/ui/widget.py",
+      line: 9,
+      column: 1,
+      text: 'def render_widget(name, theme="gray"):',
+    },
+  ],
+};
+
+function noulFor(state, questions) {
+  const answers = {};
+  for (const key of Object.keys(questions)) {
+    const index = Number(key.slice(1));
+    const anchors = Object.keys(state.hits);
+    const anchor = anchors[index] || "";
+    const impl = /foo\.py:14|widget\.py:9/.test(anchor);
+    if (key.startsWith("n")) {
+      answers[key] = { type: "noul", noul: impl ? 0.9 : 0.08 };
+    } else {
+      answers[key] = { type: "score", score: impl ? 1.8 : 0.4 };
+    }
+  }
+  return { model: "jev-1.13.0", answers, usage: { input_tokens: 1, output_tokens: 1 } };
+}
+
+test("Jev stays off without CODEQ_JEV and a key", () => {
+  assert.equal(jevEnabled({}), false);
+  assert.equal(jevEnabled({ CODEQ_JEV: "1" }), false);
+  assert.equal(jevEnabled({ TYPESAFE_API_KEY: "x" }), false);
+  assert.equal(jevEnabled({ CODEQ_JEV: "1", TYPESAFE_API_KEY: "x" }), true);
+});
+
+test("maybeRerank is a no-op when disabled", async () => {
+  const same = await maybeRerank("grep", { query: "render_widget" }, grepResult, {
+    env: {},
+    systemOne: async () => {
+      throw new Error("should not call Jev");
+    },
+  });
+  assert.equal(same, grepResult);
+});
+
+test("zero and one hits skip Jev", async () => {
+  const empty = { ...grepResult, results: [], shown: 0 };
+  const once = { ...grepResult, results: grepResult.results.slice(0, 1), shown: 1 };
+  const systemOne = async () => {
+    throw new Error("should not call Jev");
+  };
+  assert.equal(await rerank("grep", { query: "render_widget" }, empty, { systemOne }), empty);
+  assert.equal(await rerank("grep", { query: "render_widget" }, once, { systemOne }), once);
+});
+
+test("rerank sorts grep hits by Noul and never drops one", async () => {
+  const seen = [];
+  const ranked = await rerank(
+    "grep",
+    { query: "how does render_widget work", command: "grep" },
+    grepResult,
+    {
+      systemOne: async (payload) => {
+        seen.push(payload);
+        return noulFor(payload.state, payload.questions);
+      },
+    },
+  );
+  assert.equal(ranked.results.length, 3);
+  assert.deepEqual(
+    ranked.results.map((hit) => `${hit.path}:${hit.line}`),
+    ["src/pkg/foo.py:14", "src/ui/widget.py:9", "src/pkg/foo_test.py:8"],
+  );
+  assert.equal(ranked.preserveOrder, true);
+  const payload = seen[0];
+  assert.equal(payload.state.request.tool, "grep");
+  assert.equal(payload.state.request.query, "how does render_widget work");
+  assert.equal("tool" in payload.state.hits["src/pkg/foo.py:14"], false);
+  assert.ok(payload.state.hits["src/pkg/foo.py:14"].after);
+  assert.equal("before" in payload.state.hits["src/pkg/foo_test.py:8"], false);
+  assert.equal(Object.keys(payload.questions).some((key) => key.includes("choice")), false);
+});
+
+test("fail-open returns the engine page on Jev errors", async () => {
+  const ranked = await maybeRerank(
+    "grep",
+    { query: "render_widget" },
+    grepResult,
+    {
+      env: { CODEQ_JEV: "1", TYPESAFE_API_KEY: "x" },
+      systemOne: async () => {
+        throw new Error("timeout");
+      },
+    },
+  );
+  assert.equal(ranked, grepResult);
+});
+
+test("find keeps matchType and only reorders paths", async () => {
+  const result = {
+    status: "ready",
+    query: "foo.py",
+    results: [
+      { path: "src/pkg/foo_test.py", matchType: "prefix" },
+      { path: "src/pkg/foo.py", matchType: "exact" },
+    ],
+  };
+  const ranked = await rerank("find", { query: "foo.py" }, result, {
+    systemOne: async (payload) => {
+      assert.equal(payload.state.hits["src/pkg/foo.py"].matchType, "exact");
+        const answers = {};
+      for (const key of Object.keys(payload.questions)) {
+        if (key.startsWith("n")) {
+          answers[key] = {
+            type: "noul",
+            noul: key === "n1" ? 0.95 : 0.2,
+          };
+        } else {
+          answers[key] = { type: "score", score: key === "s1" ? 2 : 0.5 };
+        }
+      }
+      return { answers };
+    },
+  });
+  assert.deepEqual(
+    ranked.results.map((item) => item.path),
+    ["src/pkg/foo.py", "src/pkg/foo_test.py"],
+  );
+  assert.equal(ranked.results[0].matchType, "exact");
+});
+
+test("grep preserveOrder keeps Jev sequence on the map", () => {
+  const formatted = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "render_widget",
+    mode: "plain",
+    shown: 3,
+    moreRemain: false,
+    preserveOrder: true,
+    results: [
+      {
+        path: "src/pkg/foo.py",
+        line: 14,
+        column: 1,
+        text: "def render_widget(name, color, width=12):",
+      },
+      {
+        path: "src/pkg/foo_test.py",
+        line: 8,
+        column: 1,
+        text: "def test_render_widget_includes_name():",
+      },
+    ],
+  });
+  const defAt = formatted.text.indexOf("src/pkg/foo.py:14:1");
+  const testAt = formatted.text.indexOf("src/pkg/foo_test.py:8:1");
+  assert.ok(defAt > 0 && testAt > defAt, formatted.text);
+  assert.equal(formatted.text.includes("Jev"), false);
+  assert.equal(formatted.text.includes("noul"), false);
+});
+
+test("graph fileOrder permutes open-files without dropping one", () => {
+  const dump = [
+    "Found 2 symbols across 2 files.",
+    "",
+    "**`src/pkg/noise.py`** — helper(function)",
+    "",
+    "```python",
+    "1\tdef helper():",
+    "```",
+    "",
+    "**`src/pkg/foo.py`** — render_widget(function)",
+    "",
+    "```python",
+    "14\tdef render_widget():",
+    "```",
+  ].join("\n");
+  const result = {
+    status: "ready",
+    root: "/repo",
+    query: "how does missing work",
+    result: dump,
+    fileOrder: ["src/pkg/foo.py", "src/pkg/noise.py"],
+  };
+  const candidates = extractCandidates("graph", { query: result.query }, result);
+  assert.equal(candidates.length, 2);
+  const formatted = formatMcpToolResult("graph", result);
+  const foo = formatted.text.indexOf("src/pkg/foo.py");
+  const noise = formatted.text.indexOf("src/pkg/noise.py");
+  assert.ok(foo > 0 && foo < noise, formatted.text);
+  assert.match(formatted.text, /open these files \(2\)/);
+});

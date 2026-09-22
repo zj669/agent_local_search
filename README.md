@@ -158,6 +158,13 @@ CLI human output prints the same layer 0 map on stdout with the status line on
 stderr. `--json` is unaffected by layers: it stays the complete daemon result
 and is the stable anchor for scripts.
 
+Optional Jev rerank sits **between the engine page and the map wrapper**. It is
+**off by default**. Set `CODEQ_JEV=1` and `TYPESAFE_API_KEY` on the MCP server
+`env` or in the CLI process. One HTTP call ranks the current page with Jev
+Noul (`jev-1.13.0`); the candidate set is unchanged (no deletes). No key,
+timeout, or 4xx/5xx **skips** rerank and prints today's map. The reply text
+never names Jev. `--json` is not reranked. There is no fourth MCP tool.
+
 Every reply also names the resolved absolute root and which input selected it,
 so a call that landed in the wrong repository is visible without re-deriving
 the routing:

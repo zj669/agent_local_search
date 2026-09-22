@@ -7,6 +7,7 @@ import {
   rootOrigin,
 } from "../src/mcp-format.js";
 import { runMcpServer } from "../src/mcp.js";
+import { maybeRerank } from "../src/jev.js";
 
 const USAGE = `Usage:
   codeq [--root PATH] [--json|--full] find  <query>   [--path PATH] [--limit N]
@@ -171,7 +172,8 @@ async function runCli(argv) {
       `${JSON.stringify({ command: request.command, ...result }, null, 2)}\n`,
     );
   } else {
-    printHuman(request.command, result, full);
+    const ranked = await maybeRerank(request.command, wireRequest, result);
+    printHuman(request.command, ranked, full);
   }
 }
 
