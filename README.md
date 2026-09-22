@@ -1,10 +1,11 @@
 # codeq
 
 Local **find / grep / graph** for one repository at a time. One CLI, a stdio MCP
-server, and a per-user daemon. Three tools only — not a fourth.
+server, and a per-user daemon. Three tools only — not a fourth. Navigation, not
+Read: replies are bounded locations to open next.
 
 ```bash
-npm i -g @zj669/codeq@0.2.12
+npm i -g @zj669/codeq@0.3.0
 ```
 
 Needs **Node 22.5–24** (not 26). **Do not use `npx`** — npx steals stdin and
@@ -12,7 +13,8 @@ the handshake times out.
 
 ```bash
 codeq find foo.py
-codeq grep "TODO" --glob "**/*.py" --context 2
+codeq grep "TODO" --glob "**/*.py"
+codeq grep 'foo.*Bar' --regex
 codeq graph "how does foo work"
 codeq mcp
 ```
@@ -61,11 +63,11 @@ the config — still not npx.
 
 | | Role |
 |---|---|
-| `root` | **Selects the index** for this call: absolute path of a repository, checkout, or worktree. |
+| `root` | **Overrides** Git/cwd detection for this call: absolute path of a repository, checkout, or worktree. Omit it and the session cwd is searched. |
 | `path` | **Narrows this call** inside that index. A directory or a file, e.g. `src/pkg/foo.py`. Never builds a second index. |
 
-A relative `path` is joined to the selected `root` (0.2.12), not to the session
-cwd. `{ "root": "/abs/path/to/B", "path": "src/pkg/foo.py" }` searches
+A relative `path` is joined to the selected `root`, not to the session cwd.
+`{ "root": "/abs/path/to/B", "path": "src/pkg/foo.py" }` searches
 `/abs/path/to/B/src/pkg/foo.py` even when the window sits in another checkout.
 One call, one root — no multi-repo merge. Spawned from `$HOME` with no
 `path`/`root` and no usable `roots/list`: pass a repository; home is not
@@ -82,15 +84,18 @@ indexed.
 Every reply's first line names the resolved root (`via root argument` /
 `via path argument` / `via cwd`). Wrong tree → retry with `root`.
 
-Default replies are a map (no source). `detail: "full"` / `--full` adds source.
-`grep` is exact by default; `--fuzzy` / `fuzzy: true` is labelled `[fuzzy]`.
+Default replies are locators (no source). There is no `detail:"full"` and no
+`--full`. `grep` is a **literal** by default; `regex: true` / `--regex` is
+explicit; `--fuzzy` / `fuzzy: true` is labelled `[fuzzy]`. Grep pages with an
+opaque `cursor` bound to that same search.
 
 ## Optional Jev rerank
 
 Set `CODEQ_JEV_KEY` on the MCP server `env` (or the CLI process) to rerank the
-current page. Optional: `CODEQ_JEV_URL`, `CODEQ_JEV_MODEL`. No key, timeout, or
-4xx/5xx **skips** rerank. The reply text never names Jev. Not a fourth tool.
-`--json` is not reranked.
+visible shortlist with Noul. Optional: `CODEQ_JEV_URL`, `CODEQ_JEV_MODEL`. No
+key, timeout (800ms), too few/many candidates, or 4xx/5xx **skips** rerank.
+The reply text never names Jev. Not a fourth tool. `--json` uses the same
+order and adds `jev: { applied, skipped? }`.
 
 ## Data
 

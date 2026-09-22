@@ -287,12 +287,12 @@ test(
         new RegExp(`^\\[\\w+\\] root ${repo} via root argument`),
       );
       assert.equal(scoped.payload.root, repo);
-      assert.equal(scoped.payload.rootSource, "root");
-      assert.ok(scoped.payload.paths.length > 0, scoped.text);
-      for (const path of scoped.payload.paths) {
+      assert.equal("rootSource" in scoped.payload, false);
+      assert.ok(scoped.payload.entries.length > 0, scoped.text);
+      for (const entry of scoped.payload.entries) {
         assert.ok(
-          path.startsWith("src/leagent/agent/"),
-          `${path} is outside the requested scope\n${scoped.text}`,
+          entry.path.startsWith("src/leagent/agent/"),
+          `${entry.path} is outside the requested scope\n${scoped.text}`,
         );
       }
       assert.equal(scoped.text.includes("decoy"), false);
@@ -353,11 +353,12 @@ test(
         pattern: "PG_DATABASE_URL",
       });
       assert.equal(exact.payload.root, worktree);
-      assert.equal(exact.payload.shown, 0);
+      assert.equal(exact.payload.hits.length, 0);
       assert.equal(exact.lines[0].includes("[fuzzy]"), false);
       assert.equal(exact.text.includes("NANTIANMEN_TEST_DATABASE_URL"), false);
-      assert.match(exact.text, /0 matches, exact/);
-      assert.match(exact.text, /pass fuzzy: true/);
+      assert.match(exact.text, /0 matches/);
+      assert.match(exact.text, /pass regex: true/);
+      assert.match(exact.text, /fuzzy: true/);
 
       const approximate = await session.call("grep", {
         root: worktree,
@@ -372,25 +373,18 @@ test(
       );
     });
 
-    await t.test("grep layer 0 carries the definition line itself", async () => {
+    await t.test("grep carries the definition line itself and does not fold the rest", async () => {
       const hits = await session.call("grep", {
         root: repo,
         pattern: "format_chat_details",
       });
-      assert.equal(hits.payload.detail, "summary");
+      assert.equal("detail" in hits.payload, false);
       assert.match(
         hits.text,
         /^src\/leagent\/generator\.py:11:\d+ def format_chat_details\(session, message, \*, verbose=False\):$/m,
       );
       assert.equal(hits.text.includes("```"), false);
-
-      const full = await session.call("grep", {
-        root: repo,
-        pattern: "format_chat_details",
-        detail: "full",
-      });
-      assert.match(full.text, /^src\/leagent\/generator\.py-10- /m);
-      assert.ok(full.text.length > hits.text.length, "layer 1 must add something");
+      assert.ok(hits.payload.hits.length >= 1);
     });
 
     await t.test("graph opens the query's definition site first", async () => {
@@ -415,48 +409,39 @@ test(
       assert.equal(map.text.includes("relevant lines"), false);
       assert.match(map.text, /- get_scores \(src\/leagent\/retrieval\/bm25\.py:\d+\)/);
       assert.equal(map.text.split("- get_scores (").length - 1, 1);
-      assert.equal(map.payload.paths[0], "src/leagent/generator.py");
+      assert.equal(map.payload.entries[0].path, "src/leagent/generator.py");
       assert.equal(map.text.includes("```"), false);
-      assert.equal(map.payload.sourceIncluded, false);
+      assert.equal("sourceIncluded" in map.payload, false);
+      assert.equal("alsoRanked" in map.payload, false);
+      assert.equal("paths" in map.payload, false);
 
-      // The engine ranked these on format, chat and get; they are named, but not
-      // where the next Read goes.
+      // The engine ranked these on format, chat and get; they are named in the
+      // dump, but they are not the next Read.
       const noise = [
         "src/leagent/openai.py",
         "src/leagent/retrieval/bm25.py",
         "src/leagent/chat/field_constraints.py",
       ];
+      const entryPaths = map.payload.entries.map((entry) => entry.path);
       for (const path of noise) {
         assert.equal(
-          map.payload.paths.slice(0, 3).includes(path),
+          entryPaths.slice(0, 1).includes(path),
           false,
-          `${path} is in the top three\n${map.text}`,
+          `${path} is the first reading entry\n${map.text}`,
         );
       }
-      assert.ok(
-        noise.some((path) => map.payload.alsoRanked.includes(path)),
-        map.text,
-      );
-      assert.match(map.text, /also ranked, on shorter tokens than format_chat_details/);
-      assert.match(map.text, /detail:"full" expands them/);
+      assert.equal(map.text.includes("detail:\"full\""), false);
 
-      const full = await session.call("graph", {
+      const ignoredDetail = await session.call("graph", {
         root: repo,
         query: "how does format_chat_details work",
         detail: "full",
       });
-      const mapOf = (text) => text.split("\n").slice(1).join("\n");
-      assert.equal(mapOf(full.text).startsWith(mapOf(map.text)), true);
-      // Layer 1 spends its budget on the target file before the neighbours.
-      assert.match(
-        full.text.slice(full.text.indexOf("**Source Code**")),
-        /^\*\*`src\/leagent\/generator\.py`\*\*/m,
+      assert.equal(ignoredDetail.text.includes("```"), false);
+      assert.equal(
+        ignoredDetail.text.split("\n").slice(1).join("\n"),
+        map.text.split("\n").slice(1).join("\n"),
       );
-      const generator = full.text.indexOf("**`src/leagent/generator.py`**");
-      for (const path of noise) {
-        const index = full.text.indexOf(`**\`${path}\`**`);
-        if (index >= 0) assert.ok(generator < index, `${path} came before the target`);
-      }
     });
 
     assert.equal(existsSync(join(repo, ".codegraph")), false);

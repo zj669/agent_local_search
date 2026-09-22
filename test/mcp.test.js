@@ -244,7 +244,8 @@ test("initialize advertises only find, grep, and graph", async () => {
     assert.match(init.result.instructions, /never ask the user to init/i);
     assert.match(init.result.instructions, /graph: how code works/i);
     assert.match(init.result.instructions, /There is no callers tool/i);
-    assert.match(init.result.instructions, /detail: "full"/i);
+    assert.match(init.result.instructions, /literal string, not rg/i);
+    assert.equal(/detail:\s*"full"/i.test(init.result.instructions), false);
 
     send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const listed = await waitFor((message) => message.id === 2);
@@ -308,7 +309,8 @@ test("tools map 1:1 onto daemon find/grep/graph requests", async () => {
           arguments: {
             pattern: "TODO",
             glob: "**/*.ts",
-            context: 1,
+            regex: true,
+            cursor: "opaque",
             root: "/repo",
             limit: 8,
           },
@@ -329,9 +331,12 @@ test("tools map 1:1 onto daemon find/grep/graph requests", async () => {
       const graph = await waitFor((message) => message.id === 4);
 
       assert.equal(find.result.isError, undefined);
-      assert.equal(find.result.structuredContent.command, "find");
-      assert.equal(grep.result.structuredContent.command, "grep");
-      assert.equal(graph.result.structuredContent.command, "graph");
+      assert.equal("command" in find.result.structuredContent, false);
+      assert.deepEqual(find.result.structuredContent.paths, ["src/app.ts"]);
+      assert.equal("hits" in grep.result.structuredContent, true);
+      assert.equal("entries" in graph.result.structuredContent, true);
+      assert.equal("complete" in graph.result.structuredContent, false);
+      assert.equal(typeof graph.result.structuredContent.truncated, "boolean");
       assert.match(find.result.content[0].text, /^\[indexing\]/);
 
       assert.deepEqual(seen[0], {
@@ -348,7 +353,8 @@ test("tools map 1:1 onto daemon find/grep/graph requests", async () => {
         cwdSource: "spawn cwd",
         query: "TODO",
         glob: "**/*.ts",
-        context: 1,
+        regex: true,
+        cursor: "opaque",
         root: "/repo",
         limit: 8,
       });
@@ -500,8 +506,9 @@ test("omitting root searches the spawn cwd and the reply names it", async () => 
       );
       const defaultedPayload = defaulted.result.structuredContent;
       assert.equal(defaultedPayload.root, "/repos/worktree");
-      assert.equal(defaultedPayload.rootSource, "cwd");
-      assert.equal(defaultedPayload.cwdSource, "spawn cwd");
+      assert.equal("rootSource" in defaultedPayload, false);
+      assert.equal("cwdSource" in defaultedPayload, false);
+      assert.equal("entries" in defaultedPayload, true);
 
       send({
         jsonrpc: "2.0",
@@ -522,7 +529,7 @@ test("omitting root searches the spawn cwd and the reply names it", async () => 
         retriedText.split("\n")[0],
         "[ready] root /repos/leagent via root argument",
       );
-      assert.equal(retried.result.structuredContent.rootSource, "root");
+      assert.equal("rootSource" in retried.result.structuredContent, false);
     },
   );
 });
@@ -744,10 +751,14 @@ test("tool schemas do not mention a workspace path env", async () => {
     assert.equal(blob.includes("CODEQ_CWD"), false);
     const grep = listed.result.tools.find((tool) => tool.name === "grep");
     assert.equal(Boolean(grep.inputSchema.properties.limit), true);
-    assert.equal(Boolean(grep.inputSchema.properties.detail), true);
+    assert.equal(Boolean(grep.inputSchema.properties.detail), false);
+    assert.equal(Boolean(grep.inputSchema.properties.context), false);
+    assert.equal(Boolean(grep.inputSchema.properties.regex), true);
+    assert.equal(Boolean(grep.inputSchema.properties.cursor), true);
     for (const tool of listed.result.tools) {
       assert.equal(Boolean(tool.inputSchema.properties.path), true);
       assert.equal(Boolean(tool.inputSchema.properties.root), true);
+      assert.equal(Boolean(tool.inputSchema.properties.detail), false);
     }
   });
 });
@@ -793,10 +804,10 @@ test("tool descriptions say when to pass root and how to shape a query", async (
         tool.inputSchema.properties.root.description,
         /not the session cwd/,
       );
-      assert.match(tool.inputSchema.properties.detail.description, /layer 0/);
-      assert.match(tool.inputSchema.properties.detail.description, /layer 1/);
-      assert.match(tool.inputSchema.properties.detail.description, /no source code/);
+      assert.equal(Boolean(tool.inputSchema.properties.detail), false);
       assert.equal(Boolean(tool.outputSchema), true);
+      assert.equal("complete" in (tool.outputSchema.properties || {}), false);
+      assert.equal(Boolean(tool.outputSchema.properties.truncated), true);
     }
     assert.match(
       tools.grep.inputSchema.properties.fuzzy.description,
@@ -806,18 +817,24 @@ test("tool descriptions say when to pass root and how to shape a query", async (
       tools.grep.inputSchema.properties.fuzzy.description,
       /NOT the same identifier/,
     );
+    assert.match(tools.grep.inputSchema.properties.regex.description, /not rg/);
+    assert.match(tools.grep.inputSchema.properties.cursor.description, /opaque/i);
     assert.equal(tools.grep.description.includes("retries as fuzzy"), false);
     assert.match(tools.grep.description, /zero hits means zero hits/);
-    assert.match(tools.graph.description, /carries no source code/);
+    assert.match(tools.grep.description, /this is not rg/i);
+    assert.match(tools.graph.description, /not source/);
     assert.match(
       tools.grep.inputSchema.properties.pattern.description,
-      /One identifier or one regex/,
+      /literal string/,
     );
     assert.match(
       tools.graph.inputSchema.properties.query.description,
       /a multi-paragraph question does not/,
     );
     assert.match(tools.graph.description, /not a written answer/);
+    assert.equal(Boolean(tools.graph.outputSchema.properties.entries), true);
+    assert.equal(Boolean(tools.graph.outputSchema.properties.exactHits), false);
+    assert.equal(Boolean(tools.grep.outputSchema.properties.nextCursor), true);
   });
 });
 
@@ -870,12 +887,16 @@ test("MCP replies start with freshness and keep a graph budget", async () => {
       assert.equal(text.includes("```"), false);
       assert.equal(/verbatim/i.test(text), false);
       assert.equal(/already performed/i.test(text), false);
-      assert.ok(text.length <= 1_500, `layer 0 is ${text.length} chars`);
+      assert.ok(text.length <= 1_500, `locator map is ${text.length} chars`);
       const payload = graph.result.structuredContent;
-      assert.equal(payload.sourceIncluded, false);
-      assert.deepEqual(payload.paths, ["src/app.ts", "src/auth.ts"]);
-      assert.deepEqual(payload.files[1].renderedLines, [40, 239]);
-      assert.match(text, /no source in this map\./);
+      assert.equal("sourceIncluded" in payload, false);
+      assert.equal("files" in payload, false);
+      assert.equal("complete" in payload, false);
+      assert.deepEqual(
+        payload.entries.map((entry) => entry.path),
+        ["src/app.ts", "src/auth.ts"],
+      );
+      assert.equal(text.includes("```"), false);
     },
   );
 });
@@ -915,10 +936,13 @@ test("machine fields ride structuredContent, not a JSON copy in the text", async
       });
       const grep = await waitFor((message) => message.id === 2);
       const text = grep.result.content[0].text;
-      assert.equal(grep.result.structuredContent.command, "grep");
-      assert.equal(grep.result.structuredContent.shown, 1);
-      assert.deepEqual(grep.result.structuredContent.paths, ["src/app.ts"]);
-      assert.equal(text.includes('"paths"'), false);
+      assert.equal("command" in grep.result.structuredContent, false);
+      assert.equal(grep.result.structuredContent.truncated, false);
+      assert.equal("nextCursor" in grep.result.structuredContent, false);
+      assert.deepEqual(grep.result.structuredContent.hits, [
+        { path: "src/app.ts", line: 3, column: 5, text: "const app = 1;" },
+      ]);
+      assert.equal(text.includes('"hits"'), false);
       assert.equal(text.includes('"command": "grep"'), false);
       assert.match(text, /^src\/app\.ts:3:5 const app = 1;$/m);
     },
@@ -958,9 +982,11 @@ test("grep only goes fuzzy when the call asks for it", async () => {
       });
       const plain = await waitFor((message) => message.id === 2);
       assert.equal(seen[0].fuzzy, undefined);
+      assert.equal(seen[0].regex, undefined);
       assert.equal(plain.result.content[0].text.split("\n")[0].includes("[fuzzy]"), false);
-      assert.match(plain.result.content[0].text, /0 matches, exact/);
-      assert.match(plain.result.content[0].text, /pass fuzzy: true/);
+      assert.match(plain.result.content[0].text, /0 matches/);
+      assert.match(plain.result.content[0].text, /pass regex: true/);
+      assert.match(plain.result.content[0].text, /fuzzy: true/);
 
       send({
         jsonrpc: "2.0",
@@ -973,6 +999,39 @@ test("grep only goes fuzzy when the call asks for it", async () => {
       });
       await waitFor((message) => message.id === 3);
       assert.equal(seen[1].fuzzy, true);
+    },
+  );
+});
+
+test("grep cursor errors surface as tool errors, not page 1", async () => {
+  const { GREP_CURSOR_ERROR } = await import("../src/grep-cursor.js");
+  await withServer(
+    {
+      query: async (request) => {
+        if (request.cursor) throw new Error(GREP_CURSOR_ERROR);
+        return { root: "/repo", status: "ready", results: [] };
+      },
+    },
+    async ({ send, waitFor }) => {
+      send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {} },
+      });
+      await waitFor((message) => message.id === 1);
+      send({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "grep",
+          arguments: { pattern: "TODO", cursor: "not-a-cursor" },
+        },
+      });
+      const reply = await waitFor((message) => message.id === 2);
+      assert.equal(reply.result.isError, true);
+      assert.equal(reply.result.content[0].text, GREP_CURSOR_ERROR);
     },
   );
 });
@@ -1009,7 +1068,7 @@ test("README default MCP snippet is the wrapper, no npx, no cwd field", () => {
   assert.equal(firstSnippet.includes("CODEQ_CWD"), false);
   assert.match(readme, /npx steals stdin/);
   assert.match(readme, /codeq-mcp/);
-  assert.match(readme, /@zj669\/codeq@0\.2\.12/);
+  assert.match(readme, /@zj669\/codeq@0\.3\.0/);
   assert.match(readme, /docs\/mcp-install\.md/);
   assert.equal(readme.includes("leagent"), false);
   assert.equal(readme.includes("npx -y"), false);
@@ -1020,7 +1079,7 @@ test("repo MCP install guide covers harness clients without a second wrapper", (
     join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "mcp-install.md"),
     "utf8",
   );
-  assert.match(guide, /@zj669\/codeq@0\.2\.12/);
+  assert.match(guide, /@zj669\/codeq@0\.3\.0/);
   assert.match(
     guide,
     /claude mcp add --scope user --transport stdio codeq -- codeq mcp/,

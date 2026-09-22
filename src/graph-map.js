@@ -1,3 +1,5 @@
+import { CALLEE_CAP, ENTRY_CAP } from "./limits.js";
+
 const FILE_SECTION = /^\*\*`([^`]+)`\*\*(?:\s+—\s+(.*))?$/;
 const BLAST_LINE = /^- `([^`]+)`\s+\(([^()]+?):(\d+)\)\s+—\s+(.*)$/;
 const SUMMARY_LINE = /^Found (\d+) symbols? across (\d+) files?\.$/;
@@ -261,7 +263,7 @@ export function rankFiles(dump, hits, identifiers) {
   return { files, folded: dump.files.filter((file) => !taken.has(file.path)) };
 }
 
-export function exactHits(dump, identifiers, cap = 3) {
+export function exactHits(dump, identifiers, cap = ENTRY_CAP) {
   const wanted = new Map(identifiers.map((name) => [name.toLowerCase(), name]));
   const hits = [];
   const seen = new Set();
@@ -276,4 +278,127 @@ export function exactHits(dump, identifiers, cap = 3) {
     for (const symbol of file.symbols) add(symbol.name, file.path, null);
   }
   return hits.slice(0, cap);
+}
+
+export function applyOrder(items, order, keyOf) {
+  if (!Array.isArray(order) || order.length === 0) return items;
+  const remaining = [...items];
+  const out = [];
+  for (const key of order) {
+    const index = remaining.findIndex((item) => keyOf(item) === key);
+    if (index < 0) continue;
+    out.push(remaining.splice(index, 1)[0]);
+  }
+  out.push(...remaining);
+  return out;
+}
+
+function symbolMap(symbols) {
+  const byName = new Map();
+  for (const span of symbols || []) {
+    if (!span?.name) continue;
+    const key = span.name.toLowerCase();
+    if (!byName.has(key)) byName.set(key, span);
+  }
+  return byName;
+}
+
+function entryKey(entry) {
+  return `${entry.symbol}\0${entry.path}\0${entry.startLine}`;
+}
+
+export function resolveEntries(dump, identifiers, symbols = []) {
+  const byName = symbolMap(symbols);
+  const hits = exactHits(dump, identifiers, ENTRY_CAP);
+  const entries = [];
+  const seen = new Set();
+  const push = (entry) => {
+    if (!entry?.path || !entry.startLine) return;
+    const key = entryKey(entry);
+    if (seen.has(key)) return;
+    seen.add(key);
+    entries.push(entry);
+  };
+
+  for (const hit of hits) {
+    const span = byName.get(hit.symbol.toLowerCase());
+    push({
+      symbol: span?.name || hit.symbol,
+      path: span?.path || hit.path,
+      startLine: span?.startLine || hit.line,
+      endLine: span?.endLine || span?.startLine || hit.line,
+      kind: span?.kind || null,
+      pinned: true,
+      callees: span?.callees || [],
+    });
+  }
+  if (entries.length > 0) return entries.slice(0, ENTRY_CAP);
+
+  const ranked = rankFiles(dump, hits, identifiers);
+  for (const file of ranked.files) {
+    if (entries.length >= ENTRY_CAP) break;
+    const primary = file.symbols[0];
+    const named = primary ? byName.get(primary.name.toLowerCase()) : null;
+    const onPath = [...byName.values()].find((span) => span.path === file.path);
+    const chosen = named || onPath;
+    const start = chosen?.startLine || file.renderedLines?.[0];
+    const end = chosen?.endLine || file.renderedLines?.[1] || start;
+    push({
+      symbol: chosen?.name || primary?.name || file.path,
+      path: file.path,
+      startLine: start,
+      endLine: end,
+      kind: chosen?.kind || primary?.kind || null,
+      pinned: false,
+      callees: chosen?.callees || [],
+    });
+  }
+  return entries.slice(0, ENTRY_CAP);
+}
+
+export function collectCallees(entries, cap = CALLEE_CAP) {
+  const seen = new Set();
+  const callees = [];
+  for (const entry of entries) {
+    for (const callee of entry.callees || []) {
+      if (!callee?.name || !callee.path || !callee.line) continue;
+      const key = `${callee.name}\0${callee.path}\0${callee.line}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      callees.push({
+        name: callee.name,
+        path: callee.path,
+        line: callee.line,
+        endLine: callee.endLine,
+        text: callee.text,
+      });
+    }
+  }
+  return { shown: callees.slice(0, cap), hidden: callees.slice(cap) };
+}
+
+export function neighborhood(result) {
+  const dump = parseExploreDump(result.result);
+  const identifiers = queryIdentifiers(result.query);
+  const resolved = resolveEntries(dump, identifiers, result.symbols);
+  const entries = applyOrder(
+    resolved,
+    result.entryOrder,
+    (entry) => `${entry.path}:${entry.startLine}`,
+  );
+  const collected = collectCallees(entries);
+  const callees = applyOrder(
+    collected.shown,
+    result.calleeOrder,
+    (callee) => `${callee.path}:${callee.line}`,
+  );
+  return {
+    dump,
+    identifiers,
+    hits: exactHits(dump, identifiers),
+    entries,
+    callees,
+    hiddenCallees: collected.hidden,
+    extraFiles: Math.max(0, dump.files.length - entries.length),
+  };
 }

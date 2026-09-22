@@ -1,11 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { queryDaemon } from "./client.js";
-import {
-  formatMcpToolResult,
-  FULL_GREP_CONTEXT,
-  MCP_INSTRUCTIONS,
-} from "./mcp-format.js";
+import { formatMcpToolResult, MCP_INSTRUCTIONS } from "./mcp-format.js";
 import { isUnusableWorkspace } from "./paths.js";
 import { maybeRerank } from "./jev.js";
 
@@ -29,7 +25,7 @@ const PATH_PROPERTY = {
 const ROOT_PROPERTY = {
   type: "string",
   description:
-    "Absolute path of the repository, checkout, or worktree to search, for this call only, overriding Git/cwd detection. Pass it whenever the repository you are asking about is not the session cwd: a second clone, another checkout or worktree, or any repository when the server was spawned from $HOME. Omitting it silently searches the session cwd, which is the wrong tree when your question is about another repository. root is the only thing that selects an index, and one repository has one index: a subdirectory or a file passed as root resolves to the repository that holds it, narrowed to that subdirectory or file, and says so in the reply. To scope a search, keep root at the checkout and pass path. Every reply names the resolved root and where it came from; if that root is not the repository you meant, retry with root.",
+    "Absolute path of the repository, checkout, or worktree to search, for this call only, overriding Git/cwd detection. Pass it whenever the repository you are asking about is not the session cwd: a second clone, another checkout or worktree, or any repository when the server was spawned from $HOME. Omitting it searches the session cwd (Git/cwd detection), which is the wrong tree when your question is about another repository. path never creates or switches an index: every path in a repository reuses that repository's one index. A subdirectory or a file passed as root resolves to the repository that holds it, narrowed to that subdirectory or file, and says so in the reply. To scope a search, keep root at the checkout and pass path. Every reply names the resolved root and where it came from; if that root is not the repository you meant, retry with root.",
 };
 
 export const NO_WORKSPACE_ERROR =
@@ -47,27 +43,14 @@ const LIMIT_PROPERTY = {
   description: "Maximum number of matches to return",
 };
 
-const DETAIL_PROPERTY = {
-  type: "string",
-  enum: ["summary", "full"],
-  description:
-    'summary (default) is layer 0: the resolved root, the hit symbol\'s own line span (not the whole file), its direct callees, and for grep the definition and assignment lines grouped by file — no source code, because opening that span yourself is cheaper than us forwarding it. full is layer 1: the whole layer 0 map repeated verbatim, then source (graph) or context lines (grep/find). Pass full only when you need to quote the code; when a reply says it omitted something, it also says how to get just that part.',
-};
-
-const FRESHNESS_SCHEMA = {
+const LOCATOR_SCHEMA = {
   status: { type: ["string", "null"] },
-  warning: { type: ["string", "null"] },
-  lastSuccessfulSync: { type: ["string", "null"] },
   root: { type: ["string", "null"] },
-  rootSource: { type: ["string", "null"] },
-  rootNote: { type: ["string", "null"] },
-  cwdSource: { type: ["string", "null"] },
-  command: { type: "string" },
-  detail: { type: "string", enum: ["summary", "full"] },
+  truncated: { type: "boolean" },
 };
 
 const OUTPUT_SCHEMA_NOTE =
-  "Machine fields only. The text block is self-contained and is NOT a serialized copy of this object: codeq deliberately does not repeat the JSON in the text channel (MCP 2025-06-18 SHOULD), because that duplication is what the layered format exists to remove. A client that ignores structuredContent loses numbers, never a decision.";
+  "Machine navigation only. The text block is self-contained and is NOT a serialized copy of this object: codeq deliberately does not repeat the JSON in the text channel (MCP 2025-06-18 SHOULD). A client that ignores structuredContent still has every retrieval fact it needs to choose the next Read; it only loses machine navigation, pagination, and diagnostics.";
 
 const TOOLS = [
   {
@@ -87,7 +70,6 @@ const TOOLS = [
         root: ROOT_PROPERTY,
         cwd: CWD_PROPERTY,
         limit: LIMIT_PROPERTY,
-        detail: DETAIL_PROPERTY,
       },
       required: ["query"],
     },
@@ -95,27 +77,10 @@ const TOOLS = [
       type: "object",
       description: OUTPUT_SCHEMA_NOTE,
       properties: {
-        ...FRESHNESS_SCHEMA,
-        query: { type: "string" },
-        shown: { type: "integer" },
-        matched: { type: "integer" },
-        indexed: { type: ["integer", "null"] },
+        ...LOCATOR_SCHEMA,
         paths: { type: "array", items: { type: "string" } },
-        weakFolded: { type: "integer" },
-        results: {
-          type: "array",
-          description: 'Only filled when detail is "full".',
-          items: {
-            type: "object",
-            properties: {
-              path: { type: "string" },
-              score: { type: ["number", "null"] },
-              matchType: { type: ["string", "null"] },
-            },
-          },
-        },
       },
-      required: ["status", "root", "command", "shown", "paths"],
+      required: ["status", "root", "truncated", "paths"],
     },
     annotations: {
       readOnlyHint: true,
@@ -127,14 +92,14 @@ const TOOLS = [
     name: "grep",
     title: "Search file contents",
     description:
-      "Search file contents using the local codeq index (FFF). Auto-detects regex and rejects all-match patterns like .*. Matching is exact by default: zero hits means zero hits, and nothing is silently re-run as fuzzy. Pass fuzzy true to also accept approximate names; those replies are labelled [fuzzy] on the first line and name DIFFERENT identifiers. Indexes the selected root automatically on first use; never ask the user to init. Pass root to search a different repository and path to narrow inside one. Each call uses exactly one root; results from multiple repositories are never merged.",
+      "Search file contents using the local codeq index (FFF). Default matching is a literal string — this is not rg. Pass regex true for a regular expression. All-match patterns like .* are rejected when regex is on. Matching is exact by default: zero hits means zero hits, and nothing is silently re-run as fuzzy. Pass fuzzy true to also accept approximate names; those replies are labelled [fuzzy] on the first line and name DIFFERENT identifiers. Indexes the selected root automatically on first use; never ask the user to init. Pass root to search a different repository and path to narrow inside one. Each call uses exactly one root; results from multiple repositories are never merged.",
     inputSchema: {
       type: "object",
       properties: {
         pattern: {
           type: "string",
           description:
-            "One identifier or one regex, for example focus_item_sources or reply_.*_actor. Regex is auto-detected, so no mode flag is needed. Search one name per call instead of an or-chain of unrelated names.",
+            "One identifier or one literal string, for example focus_item_sources. This is not rg: dots, brackets, and $ are literal unless regex is true. Search one name per call instead of an or-chain of unrelated names.",
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
@@ -143,18 +108,22 @@ const TOOLS = [
           type: "string",
           description: "Optional glob used to constrain matches, for example **/*.ts",
         },
-        context: {
-          type: "integer",
-          minimum: 0,
-          description: "Number of context lines before and after each match",
+        regex: {
+          type: "boolean",
+          description:
+            "Default false. When true, pattern is a regular expression. Leave it off for a literal search — foo.ts, process.env, and array[0] are literals. This is not rg.",
         },
         fuzzy: {
           type: "boolean",
           description:
             "Default false. When the exact pattern has zero hits, also try approximate matching. Those results are NOT the same identifier — the reply is labelled [fuzzy] and names what it actually matched, so confirm the spelling before concluding anything from them. Leave it off when you know the identifier.",
         },
+        cursor: {
+          type: "string",
+          description:
+            "Opaque continuation from a previous grep nextCursor. Bound to the same root, pattern, glob, path, regex, and fuzzy. A mismatch is an error, not page 1.",
+        },
         limit: LIMIT_PROPERTY,
-        detail: DETAIL_PROPERTY,
       },
       required: ["pattern"],
     },
@@ -162,13 +131,7 @@ const TOOLS = [
       type: "object",
       description: OUTPUT_SCHEMA_NOTE,
       properties: {
-        ...FRESHNESS_SCHEMA,
-        pattern: { type: "string" },
-        mode: { type: "string", enum: ["plain", "regex", "fuzzy"] },
-        fuzzy: { type: "boolean" },
-        shown: { type: "integer" },
-        moreRemain: { type: "boolean" },
-        paths: { type: "array", items: { type: "string" } },
+        ...LOCATOR_SCHEMA,
         hits: {
           type: "array",
           items: {
@@ -181,8 +144,9 @@ const TOOLS = [
             },
           },
         },
+        nextCursor: { type: "string" },
       },
-      required: ["status", "root", "command", "shown", "moreRemain", "paths"],
+      required: ["status", "root", "truncated", "hits"],
     },
     annotations: {
       readOnlyHint: true,
@@ -194,7 +158,7 @@ const TOOLS = [
     name: "graph",
     title: "Explore the code graph",
     description:
-      "Explore related symbols and files with CodeGraph explore. Use this for call chains and pipelines (tracing which functions run from an entry point): it returns the query symbol's own span (start–end of that function or class, not the whole file) and its direct callees (name, file, line) so you can walk the chain without Bash or one grep per hop. Returns a map of the code to read next, not a written answer. Read that span; do not split a pipeline into one graph call per identifier. A query that names several symbols returns one wider map. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass root to query a different repository and path to narrow inside one. Each call uses exactly one root. The default reply is layer 0 and carries no source code; pass detail full for layer 1, which repeats the map and then adds source with the query's target file first.",
+      "Explore related symbols and files with CodeGraph explore. Use this for call chains and pipelines (tracing which functions run from an entry point): it returns recommended reading entries — the query symbol's own span (start–end of that function or class, not the whole file) when that identifier hits, otherwise an engine-selected span — and its direct callees (name, file, line) so you can walk the chain without Bash or one grep per hop. Returns a map of the code to read next, not a written answer and not source. Read that span; do not split a pipeline into one graph call per identifier. A query that names several symbols returns one wider map. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass root to query a different repository and path to narrow inside one. Each call uses exactly one root.",
     inputSchema: {
       type: "object",
       properties: {
@@ -206,7 +170,6 @@ const TOOLS = [
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
         cwd: CWD_PROPERTY,
-        detail: DETAIL_PROPERTY,
       },
       required: ["query"],
     },
@@ -214,44 +177,26 @@ const TOOLS = [
       type: "object",
       description: OUTPUT_SCHEMA_NOTE,
       properties: {
-        ...FRESHNESS_SCHEMA,
-        query: { type: ["string", "null"] },
-        exactHits: {
+        ...LOCATOR_SCHEMA,
+        entries: {
           type: "array",
+          description:
+            "Recommended reading entries for this query. Exact identifier hits are first and pinned. If there is no exact hit, these are still engine-selected spans to open.",
           items: {
             type: "object",
             properties: {
               symbol: { type: "string" },
               path: { type: "string" },
-              line: { type: ["integer", "null"] },
+              startLine: { type: "integer" },
+              endLine: { type: "integer" },
+              kind: { type: "string" },
             },
           },
-        },
-        files: {
-          type: "array",
-          description: "The files to open next, in the order the map lists them.",
-          items: {
-            type: "object",
-            properties: {
-              path: { type: "string" },
-              symbols: { type: "array", items: { type: "string" } },
-              symbolCount: { type: "integer" },
-              renderedLines: {
-                type: ["array", "null"],
-                items: { type: "integer" },
-              },
-            },
-          },
-        },
-        paths: {
-          type: "array",
-          description: "Same file list as files[].path: what to open next, nothing else.",
-          items: { type: "string" },
         },
         callees: {
           type: "array",
           description:
-            "Direct callees of the query symbol: name, file, and definition line. A one-line callee may include that single source line as text.",
+            "Direct callees of the reading entries: name, file, and definition line.",
           items: {
             type: "object",
             properties: {
@@ -259,21 +204,11 @@ const TOOLS = [
               path: { type: "string" },
               line: { type: "integer" },
               endLine: { type: "integer" },
-              text: { type: "string" },
             },
           },
         },
-        alsoRanked: { type: "array", items: { type: "string" } },
-        omitted: {
-          type: "object",
-          properties: {
-            files: { type: "integer" },
-            reason: { type: ["string", "null"] },
-          },
-        },
-        sourceIncluded: { type: "boolean" },
       },
-      required: ["status", "root", "command", "files", "paths", "sourceIncluded"],
+      required: ["status", "root", "truncated", "entries"],
     },
     annotations: {
       readOnlyHint: true,
@@ -437,11 +372,8 @@ function toolRequest(name, args, cwd) {
     if (args.root !== undefined) request.root = String(args.root);
     if (args.glob !== undefined) request.glob = String(args.glob);
     if (args.fuzzy !== undefined) request.fuzzy = Boolean(args.fuzzy);
-    if (args.context !== undefined) {
-      request.context = positiveInteger(args.context, "context", true);
-    } else if (args.detail === "full") {
-      request.context = FULL_GREP_CONTEXT;
-    }
+    if (args.regex !== undefined) request.regex = Boolean(args.regex);
+    if (args.cursor !== undefined) request.cursor = String(args.cursor);
     if (args.limit !== undefined) {
       request.limit = positiveInteger(args.limit, "limit");
     }
@@ -573,9 +505,7 @@ export function createMcpServer({
       },
     });
     const ranked = await rerank(name, request, result);
-    const formatted = formatMcpToolResult(name, ranked, {
-      detail: args?.detail === "full" ? "full" : "summary",
-    });
+    const formatted = formatMcpToolResult(name, ranked);
     return {
       content: [{ type: "text", text: formatted.text }],
       structuredContent: formatted.structuredContent,

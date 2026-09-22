@@ -24,7 +24,22 @@ test("CLI help includes mcp and the three query commands", () => {
   assert.match(stdout, /find/);
   assert.match(stdout, /grep/);
   assert.match(stdout, /--limit N/);
+  assert.match(stdout, /--regex/);
+  assert.match(stdout, /--cursor TOKEN/);
   assert.match(stdout, /graph/);
+  assert.equal(stdout.includes("--full"), false);
+});
+
+test("CLI rejects --full", () => {
+  let failed = false;
+  try {
+    run(["--full", "graph", "foo"]);
+  } catch (error) {
+    failed = true;
+    assert.match(error.stderr, /no --full or --detail/);
+    assert.equal(error.status, 2);
+  }
+  assert.equal(failed, true);
 });
 
 test("mcp help describes the stdio server", () => {

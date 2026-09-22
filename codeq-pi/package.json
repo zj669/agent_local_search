@@ -1,0 +1,49 @@
+{
+  "name": "@zj669/codeq-pi",
+  "version": "0.3.0",
+  "description": "Pi coding-agent extension: codeq find, grep, and graph (overrides builtin rg/fd)",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "codeq",
+    "grep",
+    "find",
+    "graph"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.5 <25"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "dependencies": {
+    "@zj669/codeq": "file:.."
+  },
+  "devDependencies": {
+    "typebox": "1.3.27"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zj669/agent_local_search.git",
+    "directory": "codeq-pi"
+  },
+  "homepage": "https://github.com/zj669/agent_local_search/tree/main/codeq-pi",
+  "bugs": {
+    "url": "https://github.com/zj669/agent_local_search/issues"
+  },
+  "license": "MIT"
+}

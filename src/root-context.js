@@ -6,11 +6,13 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { FileFinder } from "@ff-labs/fff-node";
 import {
-  detectGrepMode,
-  isWildcardOnlyPattern,
-  wildcardPatternError,
-} from "./grep-mode.js";
+  encodeGrepCursor,
+  grepCursorOffset,
+  openGrepCursor,
+} from "./grep-cursor.js";
+import { assertGrepPattern } from "./grep-mode.js";
 import { acquireLock } from "./lock.js";
+import { FIND_CAP, GREP_CAP, pageLimit } from "./limits.js";
 import { rootBucket } from "./paths.js";
 
 const require = createRequire(import.meta.url);
@@ -299,7 +301,7 @@ export class RootContext {
       ? `${options.constraint} ${query}`.trim()
       : query;
     const value = unwrap(
-      finder.fileSearch(scoped, { pageSize: options.limit }),
+      finder.fileSearch(scoped, { pageSize: pageLimit(options.limit, FIND_CAP) }),
       "FFF file search failed",
     );
     return {
@@ -319,31 +321,47 @@ export class RootContext {
   }
 
   async grep(pattern, options) {
-    if (isWildcardOnlyPattern(pattern)) {
-      throw new Error(wildcardPatternError(pattern));
-    }
+    const regex = Boolean(options.regex);
+    const fuzzyRequested = Boolean(options.fuzzy);
+    const mode = assertGrepPattern(pattern, { regex });
     const finder = await this.fffPromise;
     const constraints = [];
     if (options.constraint) constraints.push(options.constraint);
     if (options.glob) constraints.push(options.glob);
     const query = [...constraints, pattern].join(" ");
-    const mode = detectGrepMode(pattern);
+    const search = {
+      root: this.root,
+      pattern,
+      glob: options.glob || "",
+      constraint: options.constraint || "",
+      regex,
+      fuzzy: fuzzyRequested,
+    };
     const grepOptions = {
       mode,
       smartCase: true,
-      pageSize: options.limit,
-      beforeContext: options.context,
-      afterContext: options.context,
+      pageSize: pageLimit(options.limit, GREP_CAP),
+      beforeContext: options.context ?? 0,
+      afterContext: options.context ?? 0,
     };
+    if (options.cursor) {
+      const opened = openGrepCursor(options.cursor, search);
+      grepOptions.mode = opened.mode;
+      grepOptions.cursor = opened.cursor;
+    }
     let value = unwrap(finder.grep(query, grepOptions), "FFF content search failed");
-    let usedFuzzy = false;
-    // Approximate matching is opt-in: a zero-hit exact search stays zero unless
-    // the caller asked for it, because a fuzzy hit is a different identifier.
-    if (options.fuzzy && value.items.length === 0 && mode !== "regex") {
+    let usedFuzzy = grepOptions.mode === "fuzzy";
+    if (
+      !options.cursor &&
+      fuzzyRequested &&
+      value.items.length === 0 &&
+      mode !== "regex"
+    ) {
       const fuzzy = unwrap(
         finder.grep(query, {
           ...grepOptions,
           mode: "fuzzy",
+          cursor: null,
           beforeContext: 0,
           afterContext: 0,
         }),
@@ -354,15 +372,19 @@ export class RootContext {
         usedFuzzy = true;
       }
     }
+    const pageMode = usedFuzzy ? "fuzzy" : grepOptions.mode;
+    const nextCursor = encodeGrepCursor(
+      { ...search, mode: pageMode },
+      grepCursorOffset(value.nextCursor),
+    );
     return {
       ...this.metadata(),
       pattern,
-      mode: usedFuzzy ? "fuzzy" : mode,
-      fuzzyRequested: Boolean(options.fuzzy),
-      // FFF's totalMatched is always items.length, so it is this page, not the
-      // total: report what is shown and whether the engine has more pages.
+      mode: pageMode,
+      regex,
+      fuzzyRequested,
       shown: value.items.length,
-      moreRemain: Boolean(value.nextCursor),
+      nextCursor,
       results: value.items.map((item) => ({
         path: item.relativePath,
         line: item.lineNumber,
