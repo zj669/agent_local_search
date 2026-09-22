@@ -17,6 +17,12 @@ codeq graph "how does foo work"
 codeq mcp
 ```
 
+## Pi
+
+Native Pi coding-agent extension (not MCP): [`codeq-pi/`](codeq-pi/). Same
+three tools, same daemon. Same-name `grep` / `find` override Pi's `rg` /
+`fd`; `graph` is new. Install: `pi install` in that directory.
+
 ## Cursor MCP
 
 Global install, then **`~/.cursor/mcp.json`**. Command must be `codeq-mcp` (the
