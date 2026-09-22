@@ -20,8 +20,8 @@ codeq mcp
 ## Cursor MCP
 
 Global install, then **`~/.cursor/mcp.json`**. Command must be `codeq-mcp` (the
-official wrapper: pins Node 22.5–24, never npx). Do **not** set `cwd`. Do not
-set `CODEQ_CWD`.
+official wrapper: pins Node 22.5–24, never npx). Do **not** set `cwd`.
+Do not set `CODEQ_CWD`.
 
 ```json
 {
