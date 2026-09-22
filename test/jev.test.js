@@ -255,3 +255,37 @@ test("graph candidates are entry spans and callees, not files", () => {
   assert.equal(candidates[0].anchor, "src/pkg/foo.py:14");
   assert.equal(candidates[1].anchor, "src/pkg/layout.py:1");
 });
+
+test("graph candidates include callers after callees", () => {
+  const dump = [
+    "Found 1 symbols across 1 files.",
+    "",
+    "- `render_widget` (src/pkg/foo.py:14) — 1 caller",
+    "",
+    "**`src/pkg/foo.py`** — render_widget(function)",
+  ].join("\n");
+  const result = {
+    status: "ready",
+    root: "/repo",
+    query: "how does render_widget work",
+    result: dump,
+    symbols: [
+      {
+        name: "render_widget",
+        kind: "function",
+        path: "src/pkg/foo.py",
+        startLine: 14,
+        endLine: 22,
+        callees: [{ name: "layout", path: "src/pkg/layout.py", line: 1, endLine: 2 }],
+        callers: [{ name: "show", path: "src/pkg/widget.py", line: 25, endLine: 27 }],
+      },
+    ],
+  };
+  const candidates = extractCandidates("graph", { query: result.query }, result);
+  assert.deepEqual(
+    candidates.map((item) => item.kind),
+    ["entry", "callee", "caller"],
+  );
+  assert.equal(candidates[2].anchor, "src/pkg/widget.py:25");
+  assert.equal(candidates.length <= 16, true);
+});

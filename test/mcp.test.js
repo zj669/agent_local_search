@@ -836,6 +836,7 @@ test("tool descriptions say when to pass root and how to shape a query", async (
     assert.match(tools.find.description, /not a glob/i);
     assert.match(tools.graph.description, /not an answer or source/);
     assert.match(tools.graph.description, /Read the entry first/);
+    assert.match(tools.graph.description, /direct callees, and direct callers/);
     assert.match(tools.graph.description, /There is no callers tool/);
     assert.match(
       tools.grep.inputSchema.properties.pattern.description,
@@ -846,6 +847,8 @@ test("tool descriptions say when to pass root and how to shape a query", async (
       /a multi-paragraph question does not/,
     );
     assert.equal(Boolean(tools.graph.outputSchema.properties.entries), true);
+    assert.equal(Boolean(tools.graph.outputSchema.properties.callees), true);
+    assert.equal(Boolean(tools.graph.outputSchema.properties.callers), true);
     assert.equal(Boolean(tools.graph.outputSchema.properties.exactHits), false);
     assert.equal(Boolean(tools.grep.outputSchema.properties.nextCursor), true);
   });

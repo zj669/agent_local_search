@@ -18,7 +18,7 @@ const GREP_DESCRIPTION =
   "codeq literal string search by default; this is not rg and not Pi's builtin rg. Pass regex:true for a regular expression, fuzzy:true for approximate/different identifiers. Returns matching lines.";
 
 const GRAPH_DESCRIPTION =
-  'codeq graph: identifiers or short "how does X work". Returns an entry span and direct callees, not an answer or source. Read the entry first; follow callees only as needed. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.';
+  'codeq graph: identifiers or short "how does X work". Returns an entry span, direct callees, and direct callers, not an answer or source. Read the entry first; follow callees/callers only as needed. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.';
 
 function pathField() {
   return Type.Optional(Type.String({ description: PATH_DESCRIPTION }));
@@ -268,7 +268,7 @@ export function createCodeqExtension({
       parameters: Type.Object({
         query: Type.String({
           description:
-            "Path fragment, matched fuzzily (foo.py, profiles/app, SKILL.md). Not a glob: **/*profile* matches nothing, pass profile. Dotfiles are indexed.",
+            "Path fragment, matched fuzzily (foo.py, profiles/app, SKILL.md). Not a glob: pass profile, not **/*profile*. Dotfiles are indexed.",
         }),
         path: pathField(),
         root: rootField(),
@@ -338,7 +338,7 @@ export function createCodeqExtension({
       promptSnippet: "Explore the code graph (codeq / CodeGraph)",
       promptGuidelines: [
         'graph is codeq CodeGraph explore, not a written answer. Query identifiers or "how does X work" where X is identifiers — not a multi-paragraph question.',
-        "graph returns an entry span and direct callees. Read the entry first; follow callees only as needed. There is no callers tool.",
+        "graph returns an entry span, direct callees, and direct callers. Read the entry first; follow callees/callers only as needed. There is no callers tool.",
         "graph searches one repository per call. Pass root for another checkout; pass path to narrow. Replies are locators, never source.",
       ],
       parameters: Type.Object({

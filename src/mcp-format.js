@@ -1,6 +1,8 @@
+import { hasGlobSyntax, literalFragment } from "./find-glob.js";
 import { neighborhood } from "./graph-map.js";
 import {
   CALLEE_CAP,
+  CALLER_CAP,
   FIND_CAP,
   GREP_CAP,
   MATCH_TEXT_CHARS,
@@ -82,18 +84,6 @@ function clampText(text) {
 
 function countFiles(items) {
   return new Set(items.map((item) => item.path)).size;
-}
-
-function hasGlobSyntax(query) {
-  return /\*|\?\?|\[[^\]]+\]/.test(String(query || ""));
-}
-
-function literalFragment(query) {
-  const segments = String(query || "")
-    .split("/")
-    .map((segment) => segment.replace(/[*?[\]]/g, ""))
-    .filter(Boolean);
-  return segments[segments.length - 1] || "the name";
 }
 
 function looksLikeRegexWildcards(pattern) {
@@ -228,10 +218,15 @@ function formatFind(result) {
   if (truncated) {
     lines.push("", "more: refine query/path");
   }
-  if (hasGlobSyntax(query) && shown === 0) {
+  if (result.globFallback) {
     lines.push(
       "",
-      `find uses path fragments, not globs; try "${literalFragment(query)}".`,
+      `query looked like a glob; searched "${result.globFallback.to}"`,
+    );
+  } else if (hasGlobSyntax(query) && shown === 0) {
+    lines.push(
+      "",
+      `find uses path fragments, not globs; try "${literalFragment(query) || "the name"}".`,
     );
   }
 
@@ -240,6 +235,7 @@ function formatFind(result) {
     truncated,
     structured: {
       paths: uniquePaths(results.map((item) => item.path)),
+      ...(result.globFallback ? { globFallback: result.globFallback } : {}),
     },
   };
 }
@@ -325,44 +321,63 @@ function formatLocator(path, start, end, name) {
   return `${path}:${spanRange(start, end)} ${name}`;
 }
 
+function uniqueSymbols(entries) {
+  const names = [];
+  const seen = new Set();
+  for (const entry of entries) {
+    const key = String(entry.symbol).toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(entry.symbol);
+  }
+  return names;
+}
+
+function appendLocators(lines, items, nameOf) {
+  for (const item of items) {
+    lines.push(
+      formatLocator(
+        item.path,
+        item.line ?? item.startLine,
+        item.endLine || item.line || item.startLine,
+        nameOf(item),
+      ),
+    );
+  }
+}
+
 function formatGraph(result) {
   const map = neighborhood(result);
-  const { identifiers, hits, entries, callees, hiddenCallees } = map;
+  const {
+    identifiers,
+    entries,
+    callees,
+    callers,
+    hiddenCallees,
+    hiddenCallers,
+  } = map;
   const query = result.query ?? "";
-  const truncated = hiddenCallees.length > 0;
+  const truncated = hiddenCallees.length > 0 || hiddenCallers.length > 0;
   const lines = [];
 
-  if (hits.length > 0) {
+  if (entries.length > 0) {
     lines.push(
-      `graph "${query}" — exact ${hits.map((hit) => hit.symbol).join(", ")}`,
+      `graph "${query}" — exact ${uniqueSymbols(entries).join(", ")}`,
     );
-    if (entries.length > 0) {
-      lines.push("");
-      for (const entry of entries) {
-        lines.push(
-          formatLocator(
-            entry.path,
-            entry.startLine,
-            entry.endLine || entry.startLine,
-            entry.symbol,
-          ),
-        );
-      }
-    }
+    lines.push("");
+    appendLocators(lines, entries, (entry) => entry.symbol);
     if (callees.length > 0) {
       lines.push("", "callees");
-      for (const callee of callees) {
-        lines.push(
-          formatLocator(
-            callee.path,
-            callee.line,
-            callee.endLine || callee.line,
-            callee.name,
-          ),
-        );
-      }
+      appendLocators(lines, callees, (callee) => callee.name);
       if (hiddenCallees.length > 0) {
         lines.push(`+${hiddenCallees.length} callees omitted`);
+      }
+    }
+    if (callers.length > 0) {
+      lines.push("", "callers");
+      appendLocators(lines, callers, (caller) => caller.name);
+      if (hiddenCallers.length > 0) {
+        lines.push(`+${hiddenCallers.length} callers omitted`);
       }
     }
   } else if (identifiers.length > 0) {
@@ -394,6 +409,12 @@ function formatGraph(result) {
         line: callee.line,
         ...(callee.endLine ? { endLine: callee.endLine } : {}),
       })),
+      callers: callers.map((caller) => ({
+        name: caller.name,
+        path: caller.path,
+        line: caller.line,
+        ...(caller.endLine ? { endLine: caller.endLine } : {}),
+      })),
     },
   };
 }
@@ -418,4 +439,4 @@ export function formatMcpToolResult(command, result) {
   };
 }
 
-export { CALLEE_CAP, FIND_CAP, GREP_CAP };
+export { CALLEE_CAP, CALLER_CAP, FIND_CAP, GREP_CAP };
