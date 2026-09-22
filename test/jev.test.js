@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   extractCandidates,
+  exactNeighborhoodSkip,
   jevClientOptions,
   jevConfig,
   jevEnabled,
@@ -11,6 +12,7 @@ import {
   rerank,
   skipReason,
 } from "../src/jev.js";
+import { neighborhood } from "../src/graph-map.js";
 import { formatMcpToolResult } from "../src/mcp-format.js";
 
 const grepResult = {
@@ -110,6 +112,57 @@ const mixedConfigGrepResult = {
     },
   ],
 };
+
+const mixedDistFindResult = {
+  status: "ready",
+  query: "async",
+  results: [
+    { path: "src/pkg/foo.py", matchType: "fuzzy" },
+    { path: "dist/async.js", matchType: "fuzzy" },
+  ],
+};
+
+const mixedDistGrepResult = {
+  status: "ready",
+  root: "/repo",
+  pattern: "render_widget",
+  mode: "plain",
+  results: [
+    {
+      path: "src/pkg/foo.py",
+      line: 14,
+      column: 1,
+      text: "def render_widget(name, color, width=12):",
+    },
+    {
+      path: "dist/async.js",
+      line: 4,
+      column: 1,
+      text: "render_widget",
+    },
+  ],
+};
+
+function graphExactNeighborhood(extra = {}) {
+  return {
+    status: "ready",
+    root: "/repo",
+    query: "how does render_widget work",
+    result: "",
+    symbols: [
+      {
+        name: "render_widget",
+        kind: "function",
+        path: "src/pkg/foo.py",
+        startLine: 14,
+        endLine: 22,
+        callees: [{ name: "layout", path: "src/pkg/layout.py", line: 1, endLine: 2 }],
+        callers: [{ name: "show", path: "src/pkg/widget.py", line: 25, endLine: 27 }],
+      },
+    ],
+    ...extra,
+  };
+}
 
 function noulFor(state, questions) {
   const answers = {};
@@ -232,7 +285,7 @@ test("literal grep with a production vis16 skips the optional rerank", async () 
   assert.equal(ranked.preserveOrder, true);
   assert.deepEqual(ranked.results, prodGrepResult.results);
   const formatted = formatMcpToolResult("grep", ranked);
-  assert.equal(/jev|noul|prod_shortlist|skipped/i.test(formatted.text), false);
+  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|skipped/i.test(formatted.text), false);
 });
 
 test("no key is still no_key on a production vis16", async () => {
@@ -269,10 +322,10 @@ test("find with an all-production vis16 skips the optional rerank", async () => 
   assert.equal(ranked.preserveOrder, true);
   assert.deepEqual(ranked.results, prodFindResult.results);
   const formatted = formatMcpToolResult("find", ranked);
-  assert.equal(/jev|noul|prod_shortlist|skipped/i.test(formatted.text), false);
+  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|skipped/i.test(formatted.text), false);
 });
 
-test("regex, fuzzy, mixed-tier grep, and mixed-config find still call the optional rerank", async () => {
+test("regex, fuzzy, mixed-tier grep, mixed-config find, and dist vis16 still call the optional rerank", async () => {
   const calls = [];
   const systemOne = async (payload) => {
     calls.push(payload.state.request.tool);
@@ -298,8 +351,13 @@ test("regex, fuzzy, mixed-tier grep, and mixed-config find still call the option
     systemOne,
   });
   await maybeRerank("find", { query: "ci" }, mixedConfigFindResult, { env, systemOne });
+  await maybeRerank("find", { query: "async" }, mixedDistFindResult, { env, systemOne });
+  await maybeRerank("grep", { query: "render_widget" }, mixedDistGrepResult, {
+    env,
+    systemOne,
+  });
 
-  assert.deepEqual(calls, ["grep", "grep", "grep", "grep", "find"]);
+  assert.deepEqual(calls, ["grep", "grep", "grep", "grep", "find", "find", "grep"]);
   assert.equal(prodShortlistSkip("grep", { regex: true }, { ...prodGrepResult, mode: "regex" }), false);
   assert.equal(
     prodShortlistSkip("grep", { query: "render_widget" }, grepResult),
@@ -310,6 +368,11 @@ test("regex, fuzzy, mixed-tier grep, and mixed-config find still call the option
     false,
   );
   assert.equal(prodShortlistSkip("find", { query: "ci" }, mixedConfigFindResult), false);
+  assert.equal(prodShortlistSkip("find", { query: "async" }, mixedDistFindResult), false);
+  assert.equal(
+    prodShortlistSkip("grep", { query: "render_widget" }, mixedDistGrepResult),
+    false,
+  );
   assert.equal(
     prodShortlistSkip(
       "grep",
@@ -331,25 +394,15 @@ test("regex, fuzzy, mixed-tier grep, and mixed-config find still call the option
   );
 });
 
-test("graph does not skip the optional rerank on a production neighborhood", async () => {
+test("graph exact neighborhood skips the optional rerank", async () => {
   let called = 0;
-  const result = {
-    status: "ready",
-    root: "/repo",
-    query: "how does render_widget work",
-    result: "",
-    symbols: [
-      {
-        name: "render_widget",
-        kind: "function",
-        path: "src/pkg/foo.py",
-        startLine: 14,
-        endLine: 22,
-        callees: [{ name: "layout", path: "src/pkg/layout.py", line: 1, endLine: 2 }],
-      },
-    ],
-  };
+  const result = graphExactNeighborhood();
+  const before = neighborhood(result);
+  assert.ok(before.entries.length >= 1);
+  const candidates = extractCandidates("graph", { query: result.query }, result);
+  assert.ok(candidates.length >= 2 && candidates.length <= 16);
   assert.equal(prodShortlistSkip("graph", { query: result.query }, result), false);
+  assert.equal(exactNeighborhoodSkip("graph", { query: result.query }, result), true);
   const ranked = await maybeRerank("graph", { query: result.query }, result, {
     env: { CODEQ_JEV_KEY: "x" },
     systemOne: async (payload) => {
@@ -357,8 +410,51 @@ test("graph does not skip the optional rerank on a production neighborhood", asy
       return stubAnswers(payload);
     },
   });
-  assert.equal(called, 1);
-  assert.deepEqual(ranked.jev, { applied: true });
+  assert.equal(called, 0);
+  assert.deepEqual(ranked.jev, { applied: false, skipped: "exact_neighborhood" });
+  assert.equal(ranked.preserveOrder, true);
+  const after = neighborhood(ranked);
+  assert.deepEqual(
+    after.entries.map((entry) => `${entry.path}:${entry.startLine}`),
+    before.entries.map((entry) => `${entry.path}:${entry.startLine}`),
+  );
+  assert.deepEqual(
+    after.callees.map((item) => `${item.path}:${item.line}`),
+    before.callees.map((item) => `${item.path}:${item.line}`),
+  );
+  assert.deepEqual(
+    after.callers.map((item) => `${item.path}:${item.line}`),
+    before.callers.map((item) => `${item.path}:${item.line}`),
+  );
+  const formatted = formatMcpToolResult("graph", ranked);
+  assert.equal(
+    /jev|noul|prod_shortlist|exact_neighborhood|skipped/i.test(formatted.text),
+    false,
+  );
+  assert.match(formatted.text, /^callers: show src\/pkg\/widget\.py:25$/m);
+});
+
+test("graph miss with empty entries is too_few, not exact_neighborhood", async () => {
+  const result = {
+    status: "ready",
+    root: "/repo",
+    query: "how does missing_widget work",
+    result: "",
+    symbols: [],
+  };
+  assert.equal(neighborhood(result).entries.length, 0);
+  assert.equal(extractCandidates("graph", { query: result.query }, result).length, 0);
+  assert.equal(exactNeighborhoodSkip("graph", { query: result.query }, result), false);
+  let called = 0;
+  const ranked = await maybeRerank("graph", { query: result.query }, result, {
+    env: { CODEQ_JEV_KEY: "x" },
+    systemOne: async () => {
+      called += 1;
+      throw new Error("should not call optional rerank");
+    },
+  });
+  assert.equal(called, 0);
+  assert.deepEqual(ranked.jev, { applied: false, skipped: "too_few" });
 });
 
 test("skipReason maps HTTP and timeouts", () => {

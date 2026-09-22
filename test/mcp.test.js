@@ -247,7 +247,7 @@ test("initialize advertises only find, grep, and graph", async () => {
     assert.equal(init.result.instructions.includes("There is no callers tool"), false);
     assert.equal(/literal string, not rg/i.test(init.result.instructions), false);
     assert.equal(/detail:\s*"full"/i.test(init.result.instructions), false);
-    assert.equal(/jev|noul|prod_shortlist/i.test(init.result.instructions), false);
+    assert.equal(/jev|noul|prod_shortlist|exact_neighborhood/i.test(init.result.instructions), false);
 
     send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const listed = await waitFor((message) => message.id === 2);
@@ -751,7 +751,7 @@ test("tool schemas do not mention a workspace path env", async () => {
     const listed = await waitFor((message) => message.id === 2);
     const blob = JSON.stringify(listed.result.tools);
     assert.equal(blob.includes("CODEQ_CWD"), false);
-    assert.equal(/jev|noul|prod_shortlist/i.test(blob), false);
+    assert.equal(/jev|noul|prod_shortlist|exact_neighborhood/i.test(blob), false);
     const grep = listed.result.tools.find((tool) => tool.name === "grep");
     assert.equal(Boolean(grep.inputSchema.properties.limit), true);
     assert.equal(Boolean(grep.inputSchema.properties.detail), false);

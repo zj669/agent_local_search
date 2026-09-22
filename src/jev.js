@@ -278,6 +278,13 @@ export function prodShortlistSkip(command, request, result) {
   return results.every((item) => pathTier(item.path) === 0);
 }
 
+export function exactNeighborhoodSkip(command, request, result) {
+  if (command !== "graph") return false;
+  if (neighborhood(result).entries.length < 1) return false;
+  const candidates = extractCandidates(command, request, result);
+  return candidates.length >= 1 && candidates.length <= JEV_CANDIDATE_CAP;
+}
+
 export async function rerank(
   command,
   request,
@@ -321,6 +328,12 @@ export async function maybeRerank(command, request, result, options) {
     return withJev(
       { ...result, preserveOrder: true },
       { applied: false, skipped: "prod_shortlist" },
+    );
+  }
+  if (exactNeighborhoodSkip(command, request, result)) {
+    return withJev(
+      { ...result, preserveOrder: true },
+      { applied: false, skipped: "exact_neighborhood" },
     );
   }
   try {

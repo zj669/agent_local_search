@@ -86,6 +86,11 @@ test("isDocsPath matches doc segments and README names", () => {
   assert.equal(isDocsPath(".agents/skills/x/SKILL"), true);
   assert.equal(isDocsPath("src/skills/encode.ts"), false);
   assert.equal(isDocsPath("src/skills/x.ts"), false);
+  assert.equal(isDocsPath("CHANGELOG.md"), true);
+  assert.equal(isDocsPath("CHANGES.rst"), true);
+  assert.equal(isDocsPath("intro.md"), true);
+  assert.equal(isDocsPath("LICENSE"), true);
+  assert.equal(isDocsPath("src/notes.md"), false);
 });
 
 test("isTestPath matches foo.test.ts without treating production files as tests", () => {
@@ -110,6 +115,10 @@ test("pathTier demotes docs more than tests, production is 0", () => {
   assert.equal(pathTier("docs/guide.md"), 3);
   assert.equal(pathTier("test/README.md"), 3);
   assert.equal(pathTier("foo.test.ts"), 2);
+  assert.equal(pathTier("CHANGELOG.md"), 3);
+  assert.equal(pathTier("CHANGES.rst"), 3);
+  assert.equal(pathTier("intro.md"), 3);
+  assert.equal(pathTier("LICENSE"), 3);
 });
 
 test("pathTier demotes config/CI below production and above tests", () => {
@@ -130,6 +139,24 @@ test("pathTier demotes config/CI below production and above tests", () => {
   assert.equal(pathTier("src/pkg/foo.py"), 0);
   assert.equal(isConfigPath("src/hidden/.eleventy.js"), false);
   assert.equal(isConfigPath("src/config/load.py"), false);
+
+  assert.equal(pathTier("dist/async.js"), 1);
+  assert.equal(pathTier("dist/async.min.js"), 1);
+  assert.equal(pathTier("foo.min.css"), 1);
+  assert.equal(pathTier(".devcontainer/devcontainer.json"), 1);
+  assert.equal(pathTier(".editorconfig"), 1);
+  assert.equal(pathTier(".gitignore"), 1);
+  assert.equal(pathTier(".gitattributes"), 1);
+  assert.equal(pathTier(".readthedocs.yaml"), 1);
+  assert.equal(isConfigPath("dist/async.js"), true);
+  assert.equal(isConfigPath("coverage/lcov.info"), true);
+
+  assert.equal(pathTier("build/pkg.js"), 0);
+  assert.equal(pathTier("src/distributed/mod.py"), 0);
+  assert.equal(pathTier("src/notes.md"), 0);
+  assert.equal(pathTier("support/jsdoc/theme.css"), 0);
+  assert.equal(isConfigPath("build/pkg.js"), false);
+  assert.equal(isConfigPath("src/distributed/mod.py"), false);
 });
 
 test("find ranking pins exact, then production over docs, without basename pin", () => {
@@ -276,6 +303,107 @@ test("find vis16 membership pulls production ahead of a config/CI FFF page", () 
     ),
     true,
   );
+});
+
+test("find vis16 membership pulls production ahead of generated/aux metadata", () => {
+  function legacy037Docs(filePath) {
+    const path = String(filePath || "").replace(/\\/g, "/");
+    if (/(^|\/)(docs?|documentation|examples?|samples?|tutorials?)(\/|$)/i.test(path)) {
+      return true;
+    }
+    if (/(^|\/)\.agents(\/|$)/.test(path)) return true;
+    const base = path.split("/").pop() || "";
+    if (/^skill(?:\.md)?$/i.test(base)) return true;
+    return /^readme(?:\..+)?$/i.test(base);
+  }
+  function legacy037Config(filePath) {
+    const path = String(filePath || "").replace(/\\/g, "/");
+    if (/(^|\/)\.(github|circleci|gitlab)(\/|$)/.test(path)) return true;
+    const relative = path.replace(/^\.\/+/, "");
+    const segments = relative.split("/").filter((part) => part && part !== ".");
+    const base = path.split("/").pop() || "";
+    if (base.toLowerCase() === "py.typed") return true;
+    if (/^\.[^./]*rc(\.|$)/i.test(base) || /^\.browserslistrc$/i.test(base)) return true;
+    if (segments.length !== 1) return false;
+    return (
+      /^\.[^/]+\.(js|cjs|mjs|ts)$/i.test(base) ||
+      /\.config\.(js|cjs|mjs|ts|json)$/i.test(base) ||
+      /^karma\.conf\./i.test(base)
+    );
+  }
+  function legacy037Tier(filePath) {
+    if (legacy037Docs(filePath)) return 3;
+    if (isTestPath(filePath)) return 2;
+    if (legacy037Config(filePath)) return 1;
+    return 0;
+  }
+  function legacy037Rank(items) {
+    const exact = [];
+    const rest = [];
+    for (const item of items) {
+      if (item.matchType === "exact") exact.push(item);
+      else rest.push(item);
+    }
+    const restOrder = rest.map((item, index) => ({ item, index }));
+    restOrder.sort((a, b) => {
+      const tier = legacy037Tier(a.item.path) - legacy037Tier(b.item.path);
+      if (tier) return tier;
+      return a.index - b.index;
+    });
+    return [...exact, ...restOrder.map((entry) => entry.item)];
+  }
+
+  const auxC = { path: "dist/async.js", matchType: "fuzzy" };
+  const prodB = { path: "src/pkg/needed.py", matchType: "fuzzy" };
+  const aux = [
+    auxC,
+    { path: "dist/async.min.js", matchType: "fuzzy" },
+    { path: "coverage/lcov.info", matchType: "fuzzy" },
+    { path: "foo.min.css", matchType: "fuzzy" },
+    { path: "lib.min.js", matchType: "fuzzy" },
+    { path: ".devcontainer/devcontainer.json", matchType: "fuzzy" },
+    { path: ".editorconfig", matchType: "fuzzy" },
+    { path: ".gitignore", matchType: "fuzzy" },
+    { path: ".gitattributes", matchType: "fuzzy" },
+    { path: ".readthedocs.yaml", matchType: "fuzzy" },
+    { path: ".readthedocs.yml", matchType: "fuzzy" },
+    { path: "CHANGELOG.md", matchType: "fuzzy" },
+    { path: "CHANGES.rst", matchType: "fuzzy" },
+    { path: "intro.md", matchType: "fuzzy" },
+    { path: "LICENSE", matchType: "fuzzy" },
+    { path: "CONTRIBUTING.md", matchType: "fuzzy" },
+  ];
+  assert.equal(aux.length, 16);
+  for (const item of aux) {
+    assert.equal(legacy037Tier(item.path), 0, item.path);
+    assert.equal(pathTier(item.path) > 0, true, item.path);
+  }
+  assert.equal(legacy037Tier(prodB.path), 0);
+  assert.equal(pathTier(prodB.path), 0);
+  const filler = Array.from({ length: 31 }, (_, i) => ({
+    path: `docs/note${i}.md`,
+    matchType: "fuzzy",
+  }));
+  const window = [...aux, prodB, ...filler];
+  assert.equal(window.length, 48);
+
+  const legacyVisible = legacy037Rank(window).slice(0, 16);
+  assert.equal(
+    legacyVisible.some((item) => item.path === auxC.path),
+    true,
+  );
+  assert.equal(
+    legacyVisible.some((item) => item.path === prodB.path),
+    false,
+  );
+
+  const visible = applyFindWindow(window);
+  assert.equal(visible.length, 16);
+  assert.equal(
+    visible.some((item) => item.path === prodB.path),
+    true,
+  );
+  assert.equal(visible[0].path, prodB.path);
 });
 
 test("grep ranks production files before tests and docs, preferred hits inside a file", () => {
