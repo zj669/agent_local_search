@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   encodeGrepCursor,
+  encodeNextGrepCursor,
   GREP_CURSOR_ERROR,
+  GREP_CURSOR_VERSION,
   openGrepCursor,
 } from "../src/grep-cursor.js";
 
@@ -16,17 +18,19 @@ const search = {
   mode: "plain",
 };
 
-test("grep cursor is opaque, bound to the search, and reconstructs the engine offset", () => {
-  const token = encodeGrepCursor(search, 12);
+test("grep cursor is opaque and stores ranked offset plus FFF window start", () => {
+  const token = encodeGrepCursor(search, 16, 0);
   assert.equal(typeof token, "string");
   assert.equal(token.includes("/repo"), false);
   const opened = openGrepCursor(token, search);
   assert.equal(opened.mode, "plain");
-  assert.equal(opened.cursor._offset, 12);
+  assert.equal(opened.offset, 16);
+  assert.equal(opened.window, 0);
+  assert.equal("cursor" in opened, false);
 });
 
-test("grep cursor mismatch and junk are errors, not page 1", () => {
-  const token = encodeGrepCursor(search, 12);
+test("grep cursor mismatch, junk, and v1 tokens are errors, not page 1", () => {
+  const token = encodeGrepCursor(search, 16, 0);
   assert.throws(
     () => openGrepCursor(token, { ...search, root: "/other" }),
     (error) => error.message === GREP_CURSOR_ERROR,
@@ -47,5 +51,48 @@ test("grep cursor mismatch and junk are errors, not page 1", () => {
     () => openGrepCursor("not-a-cursor", search),
     (error) => error.message === GREP_CURSOR_ERROR,
   );
-  assert.equal(encodeGrepCursor(search, 0), null);
+  const v1 = Buffer.from(
+    JSON.stringify({
+      v: 1,
+      root: "/repo",
+      pattern: "TODO",
+      glob: "**/*.ts",
+      constraint: "src/",
+      regex: false,
+      fuzzy: false,
+      mode: "plain",
+      offset: 12,
+    }),
+    "utf8",
+  ).toString("base64url");
+  assert.throws(
+    () => openGrepCursor(v1, search),
+    (error) => error.message === GREP_CURSOR_ERROR,
+  );
+  assert.equal(encodeGrepCursor(search, 0, 0), null);
+});
+
+test("grep next cursor stays in the ranked window before following FFF", () => {
+  const within = encodeNextGrepCursor(search, {
+    rankedLength: 48,
+    offset: 0,
+    pageLength: 16,
+    windowStart: 0,
+    fffNextOffset: 9001,
+  });
+  const opened = openGrepCursor(within, search);
+  assert.equal(opened.offset, 16);
+  assert.equal(opened.window, 0);
+
+  const lastInWindow = encodeNextGrepCursor(search, {
+    rankedLength: 48,
+    offset: 32,
+    pageLength: 16,
+    windowStart: 0,
+    fffNextOffset: 9001,
+  });
+  const nextWindow = openGrepCursor(lastInWindow, search);
+  assert.equal(nextWindow.offset, 0);
+  assert.equal(nextWindow.window, 9001);
+  assert.equal(GREP_CURSOR_VERSION, 2);
 });

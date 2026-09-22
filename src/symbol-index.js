@@ -100,9 +100,9 @@ function locator(node) {
   };
 }
 
-function exactNameDefs(graph, name, constraint) {
+function exactNameDefsFromNodes(nodes, name, constraint) {
   const wanted = name.toLowerCase();
-  return (graph.getNodesByName(name) || []).filter((node) => {
+  return (nodes || []).filter((node) => {
     if (!node || !DEFINITION_KINDS.has(node.kind)) return false;
     if (!node.startLine || !node.filePath) return false;
     if (String(node.name).toLowerCase() !== wanted) return false;
@@ -110,33 +110,28 @@ function exactNameDefs(graph, name, constraint) {
   });
 }
 
+function exactNameDefs(graph, name, constraint) {
+  return exactNameDefsFromNodes(graph.getNodesByName(name) || [], name, constraint);
+}
+
 function locatorsFrom(node, edges, getNode, endpoint) {
   return relatedNodes(node, edges, getNode, endpoint).map(locator);
 }
 
-export function identifiersHaveExactDefs(graph, query) {
-  const names = queryIdentifiers(queryWithoutScope(query));
-  if (names.length === 0) return false;
-  if (typeof graph?.getNodesByName !== "function") return false;
-  const constraint = pathConstraint(query);
-  try {
-    for (const name of names) {
-      if (exactNameDefs(graph, name, constraint).length === 0) return false;
-    }
-  } catch {
-    return false;
+function collectExactNameDefs(graph, names, constraint) {
+  const defsByName = new Map();
+  for (const name of names) {
+    defsByName.set(name, exactNameDefs(graph, name, constraint));
   }
-  return true;
+  return defsByName;
 }
 
-export function symbolIndex(graph, query) {
-  const constraint = pathConstraint(query);
-  const names = queryIdentifiers(queryWithoutScope(query));
+function symbolsFromExactDefs(graph, defsByName) {
   const symbols = [];
   const seen = new Set();
   const getNode = (id) => graph.getNode(id);
-  for (const name of names) {
-    for (const node of exactNameDefs(graph, name, constraint)) {
+  for (const nodes of defsByName.values()) {
+    for (const node of nodes) {
       const key = `${node.name}\0${node.filePath}\0${node.startLine}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -161,18 +156,55 @@ export function symbolIndex(graph, query) {
   return symbols;
 }
 
+export function identifiersHaveExactDefs(graph, query) {
+  const names = queryIdentifiers(queryWithoutScope(query));
+  if (names.length === 0) return false;
+  if (typeof graph?.getNodesByName !== "function") return false;
+  try {
+    const defsByName = collectExactNameDefs(graph, names, pathConstraint(query));
+    return names.every((name) => defsByName.get(name).length > 0);
+  } catch {
+    return false;
+  }
+}
+
+export function symbolIndex(graph, query) {
+  const names = queryIdentifiers(queryWithoutScope(query));
+  const constraint = pathConstraint(query);
+  return symbolsFromExactDefs(graph, collectExactNameDefs(graph, names, constraint));
+}
+
 export async function graphSearch(graph, query, explore) {
-  if (identifiersHaveExactDefs(graph, query)) {
+  const names = queryIdentifiers(queryWithoutScope(query));
+  const canResolve =
+    names.length > 0 && typeof graph?.getNodesByName === "function";
+  let defsByName = null;
+  if (canResolve) {
     try {
-      return { result: "", symbols: symbolIndex(graph, query) };
+      defsByName = collectExactNameDefs(graph, names, pathConstraint(query));
+    } catch {
+      defsByName = null;
+    }
+  }
+
+  const allExact =
+    defsByName &&
+    names.every((name) => (defsByName.get(name) || []).length > 0);
+
+  if (allExact) {
+    try {
+      return { result: "", symbols: symbolsFromExactDefs(graph, defsByName) };
     } catch {
       // Fall through to the 0.3.2 explore + pin path.
     }
   }
+
   const text = await explore(query);
   let symbols = [];
   try {
-    symbols = symbolIndex(graph, query);
+    symbols = defsByName
+      ? symbolsFromExactDefs(graph, defsByName)
+      : symbolIndex(graph, query);
   } catch {
     symbols = [];
   }

@@ -1,5 +1,6 @@
 export const FIND_CAP = 16;
 export const GREP_CAP = 16;
+export const RANK_WINDOW = 48;
 export const ENTRY_CAP = 3;
 export const CALLEE_CAP = 4;
 export const CALLER_CAP = 4;

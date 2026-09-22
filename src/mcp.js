@@ -157,14 +157,14 @@ const TOOLS = [
     name: "graph",
     title: "Explore the code graph",
     description:
-      'Identifiers or short "how does X work". Returns an entry span, direct callees, and direct callers, not an answer or source. Read the entry first; follow callees/callers only as needed. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.',
+      'Identifiers, or a short question about how X works, where X is defined, or who calls / uses X. Returns an entry span, direct callees, and direct callers — a map, not an answer or source. For how-it-works, Read the entry. For who-calls or where-used, use the callers locators; do not grep that name first. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.',
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
           description:
-            'Identifiers, or "how does X work" where X is identifiers. Identifier-shaped queries match the graph; a multi-paragraph question does not.',
+            'Identifiers, or a short question about how X works, where X is defined, or who calls / uses X. Identifier-shaped queries match the graph; a multi-paragraph question does not.',
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,

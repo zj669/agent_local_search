@@ -276,8 +276,11 @@ test("symbolIndex keeps every exact-name definition in scope and drops the rest"
 
 function fakeGraph(nodes, { throwOnName = null } = {}) {
   const byId = Object.fromEntries(nodes.map((node) => [node.id, node]));
-  return {
+  const names = [];
+  const graph = {
+    named: names,
     getNodesByName: (name) => {
+      names.push(name);
       if (throwOnName && name === throwOnName) throw new Error("getNodesByName failed");
       const wanted = String(name).toLowerCase();
       return nodes.filter((node) => String(node.name).toLowerCase() === wanted);
@@ -292,6 +295,7 @@ function fakeGraph(nodes, { throwOnName = null } = {}) {
     },
     getNode: (id) => byId[id],
   };
+  return graph;
 }
 
 test("graphSearch skips explore when every identifier has an exact-name definition", async () => {
@@ -339,6 +343,7 @@ test("graphSearch skips explore when every identifier has an exact-name definiti
     result.symbols[0].callers.map((caller) => caller.name),
     ["show"],
   );
+  assert.deepEqual(graph.named, ["render_widget"]);
   assert.equal(identifiersHaveExactDefs(graph, "how does render_widget work"), true);
 });
 
@@ -365,6 +370,7 @@ test("graphSearch explores when any identifier lacks an exact-name definition", 
   assert.deepEqual(seen, ["how does render_widget missing_identifier work"]);
   assert.equal(mixed.result, "Found 0 symbols across 0 files.\n");
   assert.equal(mixed.symbols.some((span) => span.name === "render_widget"), true);
+  assert.deepEqual(graph.named, ["render_widget", "missing_identifier"]);
   assert.equal(identifiersHaveExactDefs(graph, "how does missing_identifier work"), false);
 
   seen.length = 0;

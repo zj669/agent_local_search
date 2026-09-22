@@ -343,6 +343,44 @@ test("grep groups hits by file, prefers definitions, and does not fold the rest"
   assert.equal(formatted.structuredContent.truncated, false);
 });
 
+test("grep formatter ranks production files before README without undoing Jev", () => {
+  const formatted = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "foo",
+    mode: "plain",
+    results: [
+      { path: "README.md", line: 2, column: 1, text: "foo in docs" },
+      { path: "src/pkg/foo.py", line: 8, column: 1, text: "    return foo" },
+      { path: "src/pkg/foo.py", line: 1, column: 5, text: "def foo():" },
+    ],
+  });
+  const paths = formatted.structuredContent.hits.map(
+    (hit) => `${hit.path}:${hit.line}`,
+  );
+  assert.deepEqual(paths, [
+    "src/pkg/foo.py:1",
+    "src/pkg/foo.py:8",
+    "README.md:2",
+  ]);
+
+  const jev = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "foo",
+    mode: "plain",
+    preserveOrder: true,
+    results: [
+      { path: "README.md", line: 2, column: 1, text: "foo in docs" },
+      { path: "src/pkg/foo.py", line: 1, column: 5, text: "def foo():" },
+    ],
+  });
+  assert.deepEqual(
+    jev.structuredContent.hits.map((hit) => hit.path),
+    ["README.md", "src/pkg/foo.py"],
+  );
+});
+
 test("grep is exact by default and never labels itself fuzzy", () => {
   const formatted = formatMcpToolResult("grep", {
     status: "ready",

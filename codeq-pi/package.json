@@ -1,6 +1,6 @@
 {
   "name": "@zj669/codeq-pi",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "Pi coding-agent extension: codeq find, grep, and graph (overrides builtin rg/fd)",
   "type": "module",
   "keywords": [

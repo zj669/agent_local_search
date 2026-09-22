@@ -18,7 +18,7 @@ const GREP_DESCRIPTION =
   "codeq literal string search by default; this is not rg and not Pi's builtin rg. Pass regex:true for a regular expression, fuzzy:true for approximate/different identifiers. Returns matching lines.";
 
 const GRAPH_DESCRIPTION =
-  'codeq graph: identifiers or short "how does X work". Returns an entry span, direct callees, and direct callers, not an answer or source. Read the entry first; follow callees/callers only as needed. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.';
+  "codeq graph: identifiers, or a short question about how X works, where X is defined, or who calls / uses X. Returns an entry span, direct callees, and direct callers — a map, not an answer or source. For how-it-works, Read the entry. For who-calls or where-used, use the callers locators; do not grep that name first. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.";
 
 function pathField() {
   return Type.Optional(Type.String({ description: PATH_DESCRIPTION }));
@@ -337,14 +337,14 @@ export function createCodeqExtension({
       description: GRAPH_DESCRIPTION,
       promptSnippet: "Explore the code graph (codeq / CodeGraph)",
       promptGuidelines: [
-        'graph is codeq CodeGraph explore, not a written answer. Query identifiers or "how does X work" where X is identifiers — not a multi-paragraph question.',
-        "graph returns an entry span, direct callees, and direct callers. Read the entry first; follow callees/callers only as needed. There is no callers tool.",
+        "graph is codeq CodeGraph explore, not a written answer. Query identifiers, how X works, where X is defined, or who calls / uses X — not a multi-paragraph question.",
+        "graph: for how-it-works, Read the entry. For who-calls or where-used, use the callers locators; do not grep that name first. There is no callers tool.",
         "graph searches one repository per call. Pass root for another checkout; pass path to narrow. Replies are locators, never source.",
       ],
       parameters: Type.Object({
         query: Type.String({
           description:
-            'Identifiers, or "how does X work" where X is identifiers. Identifier-shaped queries match the graph; a multi-paragraph question does not.',
+            'Identifiers, or a short question about how X works, where X is defined, or who calls / uses X. Identifier-shaped queries match the graph; a multi-paragraph question does not.',
         }),
         path: pathField(),
         root: rootField(),

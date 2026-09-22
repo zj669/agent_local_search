@@ -834,8 +834,11 @@ test("tool descriptions say when to pass root and how to shape a query", async (
     assert.equal(tools.grep.description.includes("retries as fuzzy"), false);
     assert.match(tools.grep.description, /this is not rg/i);
     assert.match(tools.find.description, /not a glob/i);
-    assert.match(tools.graph.description, /not an answer or source/);
-    assert.match(tools.graph.description, /Read the entry first/);
+    assert.match(tools.graph.description, /not an answer or source|a map, not an answer or source/);
+    assert.match(tools.graph.description, /where X is defined/);
+    assert.match(tools.graph.description, /who calls/);
+    assert.match(tools.graph.description, /For how-it-works, Read the entry/);
+    assert.doesNotMatch(tools.graph.description, /Read the entry first/);
     assert.match(tools.graph.description, /direct callees, and direct callers/);
     assert.match(tools.graph.description, /There is no callers tool/);
     assert.match(
@@ -845,6 +848,14 @@ test("tool descriptions say when to pass root and how to shape a query", async (
     assert.match(
       tools.graph.inputSchema.properties.query.description,
       /a multi-paragraph question does not/,
+    );
+    assert.match(
+      tools.graph.inputSchema.properties.query.description,
+      /where X is defined/,
+    );
+    assert.match(
+      tools.graph.inputSchema.properties.query.description,
+      /who calls/,
     );
     assert.equal(Boolean(tools.graph.outputSchema.properties.entries), true);
     assert.equal(Boolean(tools.graph.outputSchema.properties.callees), true);

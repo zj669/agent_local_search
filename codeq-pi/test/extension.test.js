@@ -128,6 +128,21 @@ test("factory registers grep, find, and graph only, without querying", async () 
   assert.match(pi.tools[1].description, /literal string/);
   assert.match(pi.tools[2].description, /direct callees, and direct callers/);
   assert.match(pi.tools[2].description, /There is no callers tool/);
+  assert.match(pi.tools[2].description, /where X is defined/);
+  assert.match(pi.tools[2].description, /who calls/);
+  assert.match(pi.tools[2].description, /For how-it-works, Read the entry/);
+  assert.doesNotMatch(pi.tools[2].description, /Read the entry first/);
+  const graphGuide = pi.tools[2].promptGuidelines.join("\n");
+  assert.match(graphGuide, /where X is defined/);
+  assert.match(graphGuide, /who calls/);
+  assert.match(graphGuide, /how-it-works, Read the entry/);
+  assert.doesNotMatch(graphGuide, /Read the entry first/);
+  assert.match(
+    pi.tools[2].parameters.properties.query.description,
+    /who calls/,
+  );
+  assert.match(pi.tools[0].promptGuidelines.join("\n"), /not a glob/);
+  assert.match(pi.tools[1].promptGuidelines.join("\n"), /literal string/);
   assert.equal(Boolean(pi.tools[1].parameters.properties.regex), true);
   assert.equal(Boolean(pi.tools[1].parameters.properties.cursor), true);
   assert.equal(Boolean(pi.tools[1].parameters.properties.context), false);

@@ -1,3 +1,5 @@
+export const GREP_CURSOR_VERSION = 2;
+
 export const GREP_CURSOR_ERROR =
   "grep cursor is not valid for this search. It is opaque and bound to the same root, pattern, glob, path, regex, and fuzzy as the call that issued it. Pass that cursor back unchanged. A mismatch or a stale cursor is an error, not page 1.";
 
@@ -7,7 +9,7 @@ function canonical(value) {
 
 function payloadFor(search) {
   return {
-    v: 1,
+    v: GREP_CURSOR_VERSION,
     root: canonical(search.root),
     pattern: canonical(search.pattern),
     glob: canonical(search.glob),
@@ -18,15 +20,32 @@ function payloadFor(search) {
   };
 }
 
-export function encodeGrepCursor(search, offset) {
+export function encodeGrepCursor(search, offset, window = 0) {
   const inner = Number(offset);
-  if (!Number.isSafeInteger(inner) || inner <= 0) return null;
+  const origin = Number(window);
+  if (!Number.isSafeInteger(inner) || inner < 0) return null;
+  if (!Number.isSafeInteger(origin) || origin < 0) return null;
+  if (inner === 0 && origin === 0) return null;
   if (!search.mode) return null;
   const token = Buffer.from(
-    JSON.stringify({ ...payloadFor(search), offset: inner }),
+    JSON.stringify({ ...payloadFor(search), window: origin, offset: inner }),
     "utf8",
   ).toString("base64url");
   return token;
+}
+
+export function encodeNextGrepCursor(
+  search,
+  { rankedLength, offset, pageLength, windowStart, fffNextOffset },
+) {
+  const nextOffset = offset + pageLength;
+  if (nextOffset < rankedLength) {
+    return encodeGrepCursor(search, nextOffset, windowStart);
+  }
+  if (Number.isSafeInteger(fffNextOffset) && fffNextOffset > 0) {
+    return encodeGrepCursor(search, 0, fffNextOffset);
+  }
+  return null;
 }
 
 export function grepCursorOffset(nextCursor) {
@@ -48,10 +67,11 @@ export function openGrepCursor(token, search) {
     throw new Error(GREP_CURSOR_ERROR);
   }
   const expected = payloadFor(search);
+  const window = parsed?.window ?? 0;
   if (
     !parsed ||
     typeof parsed !== "object" ||
-    parsed.v !== 1 ||
+    parsed.v !== GREP_CURSOR_VERSION ||
     parsed.root !== expected.root ||
     parsed.pattern !== expected.pattern ||
     parsed.glob !== expected.glob ||
@@ -59,10 +79,13 @@ export function openGrepCursor(token, search) {
     parsed.regex !== expected.regex ||
     parsed.fuzzy !== expected.fuzzy ||
     !Number.isSafeInteger(parsed.offset) ||
-    parsed.offset <= 0 ||
+    parsed.offset < 0 ||
+    !Number.isSafeInteger(window) ||
+    window < 0 ||
+    (parsed.offset === 0 && window === 0) ||
     !["plain", "regex", "fuzzy"].includes(parsed.mode)
   ) {
     throw new Error(GREP_CURSOR_ERROR);
   }
-  return { cursor: toFffCursor(parsed.offset), mode: parsed.mode };
+  return { mode: parsed.mode, offset: parsed.offset, window };
 }
