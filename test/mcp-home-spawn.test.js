@@ -211,7 +211,7 @@ test(
       true,
       found.text.split("\n")[0],
     );
-    assert.equal(found.payload.rootSource, "path");
+    assert.equal("rootSource" in found.payload, false);
     assert.ok(
       found.payload.paths.some((path) => path.endsWith("BetaUniqueModule.ts")),
     );

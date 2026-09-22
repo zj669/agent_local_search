@@ -264,8 +264,13 @@ test(
     assert.match(lines[end - 1], /return \{/);
     assert.ok(end < lines.length, map.text);
     assert.equal(map.text.includes("relevant lines"), false);
-    assert.equal(map.payload.paths[0], "src/pkg/widget.py");
-    assert.equal(map.payload.paths.includes("src/pkg/noise/format_help.py"), false);
+    assert.equal(map.payload.entries[0].path, "src/pkg/widget.py");
+    assert.equal(
+      map.payload.entries.some((entry) =>
+        entry.path.includes("src/pkg/noise/format_help.py"),
+      ),
+      false,
+    );
     assert.equal(map.text.includes("1. src/pkg/noise/format_help.py"), false);
     for (const name of ["layout", "paint", "clamp", "shade"]) {
       assert.equal(map.text.split(`- ${name} (`).length - 1, 1, map.text);
@@ -279,9 +284,10 @@ test(
     assert.match(grep.text, /^src\/pkg\/widget\.py:\d+:\d+ STATUS = "idle"$/m);
     assert.match(grep.text, /^src\/pkg\/widget\.py:\d+:\d+ status = color$/m);
     assert.match(grep.text, /^src\/pkg\/view\.py:\d+:\d+ status = "shown"$/m);
-    assert.match(grep.text, /more hits in these files:/);
-    assert.equal(grep.text.includes("return status"), false);
-    const full = await call("grep", { root: repo, pattern: "status", detail: "full" });
-    assert.match(full.text, /return status/);
+    assert.match(grep.text, /return status/);
+    assert.equal(grep.text.includes("more hits in these files:"), false);
+    assert.equal(grep.text.includes("detail:\"full\""), false);
+    assert.ok(grep.payload.hits.length >= 3);
+    assert.equal(typeof grep.payload.truncated, "boolean");
   },
 );

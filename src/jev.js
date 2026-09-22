@@ -1,21 +1,12 @@
-import {
-  exactHits,
-  parseExploreDump,
-  queryIdentifiers,
-  rankFiles,
-} from "./graph-map.js";
+import { neighborhood } from "./graph-map.js";
+import { JEV_CANDIDATE_CAP, JEV_TIMEOUT_MS } from "./limits.js";
 
-export const JEV_TIMEOUT_MS = 2_000;
+export { JEV_TIMEOUT_MS, JEV_CANDIDATE_CAP };
 
 const NOUL_TRUE =
   "This hit is useful next-read evidence for answering the request query (a definition or implementation of the named function).";
 const NOUL_FALSE =
   "This hit does not help answer the request query (a test, alias, comment, or unrelated mention).";
-const SCORE_LEVELS = [
-  "Not useful; fold away from the first screen",
-  "Secondary; keep but can fold",
-  "Primary next-read; keep prominent",
-];
 
 function trimEnv(value) {
   const text = String(value ?? "").trim();
@@ -51,6 +42,23 @@ export function jevClientOptions(env = process.env) {
   };
 }
 
+export function skipReason(error) {
+  const status = error?.status ?? error?.statusCode ?? error?.status_code;
+  if (Number.isInteger(status) && status >= 400 && status < 500) return "http_4xx";
+  if (Number.isInteger(status) && status >= 500 && status < 600) return "http_5xx";
+  const message = String(error?.message || error || "").toLowerCase();
+  const name = String(error?.name || "").toLowerCase();
+  if (
+    name.includes("timeout") ||
+    message.includes("timeout") ||
+    message.includes("timed out") ||
+    name === "aborterror"
+  ) {
+    return "timeout";
+  }
+  return "error";
+}
+
 function compact(record) {
   const out = {};
   for (const [key, value] of Object.entries(record)) {
@@ -75,6 +83,8 @@ export function extractCandidates(command, request, result) {
   if (command === "find") {
     return (result.results || []).map((item, index) => ({
       index,
+      kind: "find",
+      pinned: item.matchType === "exact",
       anchor: item.path,
       record: compact({
         path: item.path,
@@ -83,48 +93,54 @@ export function extractCandidates(command, request, result) {
     }));
   }
   if (command === "grep") {
-    return (result.results || []).map((item, index) => {
-      const before = item.contextBefore || [];
-      const after = item.contextAfter || [];
-      const local =
-        before.length > 0 || after.length > 0
-          ? { before, match: item.text, after }
-          : {};
-      return {
-        index,
-        anchor: `${item.path}:${item.line}`,
-        record: compact({
-          path: item.path,
-          line: item.line,
-          column: item.column,
-          text: item.text,
-          ...local,
-        }),
-      };
-    });
-  }
-  if (command === "graph") {
-    const dump = parseExploreDump(result.result);
-    const identifiers = queryIdentifiers(result.query ?? request.query);
-    const hits = exactHits(dump, identifiers);
-    const ranked = rankFiles(dump, hits, identifiers);
-    return ranked.files.map((file, index) => ({
+    return (result.results || []).map((item, index) => ({
       index,
-      anchor: file.renderedLines
-        ? `${file.path}:${file.renderedLines[0]}`
-        : file.path,
-      path: file.path,
+      kind: "grep",
+      pinned: false,
+      anchor: `${item.path}:${item.line}`,
       record: compact({
-        path: file.path,
-        symbols: file.symbols.map((symbol) =>
-          compact({ name: symbol.name, kind: symbol.kind }),
-        ),
-        symbolCount: file.symbolCount,
-        span: file.renderedLines
-          ? { start: file.renderedLines[0], end: file.renderedLines[1] }
-          : undefined,
+        path: item.path,
+        line: item.line,
+        column: item.column,
+        text: item.text,
+        ...((item.contextBefore || []).length > 0 || (item.contextAfter || []).length > 0
+          ? {
+              before: item.contextBefore || [],
+              match: item.text,
+              after: item.contextAfter || [],
+            }
+          : {}),
       }),
     }));
+  }
+  if (command === "graph") {
+    const map = neighborhood({ ...result, entryOrder: null, calleeOrder: null });
+    const entries = map.entries.map((entry, index) => ({
+      index,
+      kind: "entry",
+      pinned: Boolean(entry.pinned),
+      anchor: `${entry.path}:${entry.startLine}`,
+      record: compact({
+        symbol: entry.symbol,
+        path: entry.path,
+        startLine: entry.startLine,
+        endLine: entry.endLine,
+        kind: entry.kind,
+      }),
+    }));
+    const callees = map.callees.map((callee, index) => ({
+      index: entries.length + index,
+      kind: "callee",
+      pinned: false,
+      anchor: `${callee.path}:${callee.line}`,
+      record: compact({
+        name: callee.name,
+        path: callee.path,
+        line: callee.line,
+        endLine: callee.endLine,
+      }),
+    }));
+    return [...entries, ...callees];
   }
   return [];
 }
@@ -148,26 +164,34 @@ function permute(items, order, keyOf) {
   return out;
 }
 
-function applyRanking(command, result, candidates, ranked) {
+function sortVisible(candidates, ranked) {
   const byIndex = new Map(ranked.map((item) => [item.index, item]));
-  const ordered = [...candidates].sort((a, b) => {
-    const left = byIndex.get(a.index);
-    const right = byIndex.get(b.index);
-    const noul = (right?.noul ?? 0) - (left?.noul ?? 0);
-    if (noul !== 0) return noul;
-    const score = (right?.score ?? 0) - (left?.score ?? 0);
-    if (score !== 0) return score;
-    return a.index - b.index;
-  });
+  const noulOf = (candidate) => byIndex.get(candidate.index)?.noul ?? 0;
+  const pinned = candidates.filter((candidate) => candidate.pinned);
+  const rest = candidates
+    .filter((candidate) => !candidate.pinned)
+    .sort((left, right) => {
+      const noul = noulOf(right) - noulOf(left);
+      if (noul !== 0) return noul;
+      return left.index - right.index;
+    });
+  return [...pinned, ...rest];
+}
+
+function applyRanking(command, result, candidates, ranked) {
+  const ordered = sortVisible(candidates, ranked);
   if (command === "graph") {
     return {
       ...result,
-      fileOrder: ordered.map((item) => item.path),
+      entryOrder: ordered
+        .filter((item) => item.kind === "entry")
+        .map((item) => item.anchor),
+      calleeOrder: ordered
+        .filter((item) => item.kind === "callee")
+        .map((item) => item.anchor),
     };
   }
-  const keys = ordered.map((item) =>
-    command === "find" ? item.record.path : item.anchor,
-  );
+  const keys = ordered.map((item) => item.anchor);
   const results = permute(
     result.results || [],
     keys,
@@ -175,6 +199,7 @@ function applyRanking(command, result, candidates, ranked) {
       ? (item) => item.path
       : (item) => `${item.path}:${item.line}`,
   );
+  if (results.length !== (result.results || []).length) return result;
   return {
     ...result,
     results,
@@ -183,16 +208,12 @@ function applyRanking(command, result, candidates, ranked) {
 }
 
 async function defaultSystemOne(payload, env = process.env) {
-  const { TypeSafeClient, noul, score } = await import("@typesafe-ai/sdk");
+  const { TypeSafeClient, noul } = await import("@typesafe-ai/sdk");
   const config = jevConfig(env);
   const client = new TypeSafeClient(jevClientOptions(env));
   const questions = {};
   for (const [key, question] of Object.entries(payload.questions)) {
-    if (question.type === "noul") {
-      questions[key] = noul(question.instructions, question.criteria);
-    } else {
-      questions[key] = score(question.instructions, question.criteria);
-    }
+    questions[key] = noul(question.instructions, question.criteria);
   }
   return client.systemOne({
     ...(config.model ? { model: config.model } : {}),
@@ -209,11 +230,6 @@ function questionsFor(candidates) {
       instructions: `Does the hit \`${candidate.anchor}\` help answer the request query?`,
       criteria: { true: NOUL_TRUE, false: NOUL_FALSE },
     };
-    questions[`s${index}`] = {
-      type: "score",
-      instructions: `How should a search wrapper present \`${candidate.anchor}\` for the request query?`,
-      criteria: SCORE_LEVELS,
-    };
   }
   return questions;
 }
@@ -221,15 +237,14 @@ function questionsFor(candidates) {
 function readAnswers(answers, candidates) {
   return candidates.map((candidate, index) => {
     const noulAnswer = answers[`n${index}`];
-    const scoreAnswer = answers[`s${index}`];
-    const noul =
+    const value =
       noulAnswer && typeof noulAnswer.noul === "number" ? noulAnswer.noul : 0;
-    const score =
-      scoreAnswer && typeof scoreAnswer.score === "number"
-        ? scoreAnswer.score
-        : 0;
-    return { index: candidate.index, noul, score };
+    return { index: candidate.index, noul: value };
   });
+}
+
+function withJev(result, jev) {
+  return { ...result, jev };
 }
 
 export async function rerank(
@@ -239,7 +254,9 @@ export async function rerank(
   { systemOne, env = process.env } = {},
 ) {
   const candidates = extractCandidates(command, request, result);
-  if (candidates.length <= 1) return result;
+  if (candidates.length <= 1 || candidates.length > JEV_CANDIDATE_CAP) {
+    return result;
+  }
   const call = systemOne || ((payload) => defaultSystemOne(payload, env));
   const payload = {
     state: buildState(command, request, result, candidates),
@@ -253,17 +270,26 @@ export async function rerank(
     const before = (result.results || []).length;
     const after = (next.results || []).length;
     if (after !== before) return result;
-  } else if ((next.fileOrder || []).length !== candidates.length) {
-    return result;
   }
   return next;
 }
 
 export async function maybeRerank(command, request, result, options) {
-  if (!jevEnabled(options?.env ?? process.env)) return result;
+  const env = options?.env ?? process.env;
+  if (!jevEnabled(env)) {
+    return withJev(result, { applied: false, skipped: "no_key" });
+  }
+  const candidates = extractCandidates(command, request, result);
+  if (candidates.length <= 1) {
+    return withJev(result, { applied: false, skipped: "too_few" });
+  }
+  if (candidates.length > JEV_CANDIDATE_CAP) {
+    return withJev(result, { applied: false, skipped: "too_many" });
+  }
   try {
-    return await rerank(command, request, result, options);
-  } catch {
-    return result;
+    const next = await rerank(command, request, result, options);
+    return withJev(next, { applied: true });
+  } catch (error) {
+    return withJev(result, { applied: false, skipped: skipReason(error) });
   }
 }

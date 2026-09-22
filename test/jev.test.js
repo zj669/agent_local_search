@@ -8,6 +8,7 @@ import {
   JEV_TIMEOUT_MS,
   maybeRerank,
   rerank,
+  skipReason,
 } from "../src/jev.js";
 import { formatMcpToolResult } from "../src/mcp-format.js";
 
@@ -16,8 +17,6 @@ const grepResult = {
   root: "/repo",
   pattern: "render_widget",
   mode: "plain",
-  shown: 3,
-  moreRemain: false,
   results: [
     {
       path: "src/pkg/foo_test.py",
@@ -52,11 +51,7 @@ function noulFor(state, questions) {
     const anchors = Object.keys(state.hits);
     const anchor = anchors[index] || "";
     const impl = /foo\.py:14|widget\.py:9/.test(anchor);
-    if (key.startsWith("n")) {
-      answers[key] = { type: "noul", noul: impl ? 0.9 : 0.08 };
-    } else {
-      answers[key] = { type: "score", score: impl ? 1.8 : 0.4 };
-    }
+    answers[key] = { type: "noul", noul: impl ? 0.9 : 0.08 };
   }
   return { model: "configured-model", answers, usage: { input_tokens: 1, output_tokens: 1 } };
 }
@@ -74,8 +69,8 @@ test("Jev runs iff a key is configured", () => {
   });
   assert.equal(configured.url, "https://jev.example.test");
   assert.equal(configured.model, "configured-model");
-  assert.equal(configured.timeoutMs, 2000);
-  assert.equal(JEV_TIMEOUT_MS, 2000);
+  assert.equal(configured.timeoutMs, 800);
+  assert.equal(JEV_TIMEOUT_MS, 800);
   const options = jevClientOptions({
     CODEQ_JEV_KEY: "x",
     CODEQ_JEV_URL: "https://jev.example.test",
@@ -83,31 +78,34 @@ test("Jev runs iff a key is configured", () => {
   });
   assert.equal(options.baseURL, "https://jev.example.test");
   assert.equal(options.defaultModel, "configured-model");
-  assert.equal(options.timeout, 2000);
+  assert.equal(options.timeout, 800);
   assert.equal(options.retry.maxRetries, 0);
-  const bare = jevClientOptions({ CODEQ_JEV_KEY: "x" });
-  assert.equal("baseURL" in bare, false);
-  assert.equal("defaultModel" in bare, false);
 });
 
 test("maybeRerank is a no-op when disabled", async () => {
-  const same = await maybeRerank("grep", { query: "render_widget" }, grepResult, {
+  const ranked = await maybeRerank("grep", { query: "render_widget" }, grepResult, {
     env: {},
     systemOne: async () => {
       throw new Error("should not call Jev");
     },
   });
-  assert.equal(same, grepResult);
+  assert.deepEqual(ranked.results, grepResult.results);
+  assert.deepEqual(ranked.jev, { applied: false, skipped: "no_key" });
 });
 
 test("zero and one hits skip Jev", async () => {
-  const empty = { ...grepResult, results: [], shown: 0 };
-  const once = { ...grepResult, results: grepResult.results.slice(0, 1), shown: 1 };
+  const empty = { ...grepResult, results: [] };
+  const once = { ...grepResult, results: grepResult.results.slice(0, 1) };
   const systemOne = async () => {
     throw new Error("should not call Jev");
   };
   assert.equal(await rerank("grep", { query: "render_widget" }, empty, { systemOne }), empty);
   assert.equal(await rerank("grep", { query: "render_widget" }, once, { systemOne }), once);
+  const skipped = await maybeRerank("grep", { query: "render_widget" }, once, {
+    env: { CODEQ_JEV_KEY: "x" },
+    systemOne,
+  });
+  assert.equal(skipped.jev.skipped, "too_few");
 });
 
 test("rerank sorts grep hits by Noul and never drops one", async () => {
@@ -131,10 +129,7 @@ test("rerank sorts grep hits by Noul and never drops one", async () => {
   assert.equal(ranked.preserveOrder, true);
   const payload = seen[0];
   assert.equal(payload.state.request.tool, "grep");
-  assert.equal(payload.state.request.query, "how does render_widget work");
-  assert.equal("tool" in payload.state.hits["src/pkg/foo.py:14"], false);
-  assert.ok(payload.state.hits["src/pkg/foo.py:14"].after);
-  assert.equal("before" in payload.state.hits["src/pkg/foo_test.py:8"], false);
+  assert.equal(Object.keys(payload.questions).some((key) => key.startsWith("s")), false);
   assert.equal(Object.keys(payload.questions).some((key) => key.includes("choice")), false);
 });
 
@@ -150,40 +145,48 @@ test("fail-open returns the engine page on Jev errors", async () => {
       },
     },
   );
-  assert.equal(ranked, grepResult);
+  assert.deepEqual(ranked.results, grepResult.results);
+  assert.deepEqual(ranked.jev, { applied: false, skipped: "timeout" });
 });
 
-test("find keeps matchType and only reorders paths", async () => {
+test("skipReason maps HTTP and timeouts", () => {
+  assert.equal(skipReason({ status: 401 }), "http_4xx");
+  assert.equal(skipReason({ status: 503 }), "http_5xx");
+  assert.equal(skipReason({ message: "Request timed out" }), "timeout");
+});
+
+test("find pins exact path matches above Noul", async () => {
   const result = {
     status: "ready",
     query: "foo.py",
     results: [
       { path: "src/pkg/foo_test.py", matchType: "prefix" },
       { path: "src/pkg/foo.py", matchType: "exact" },
+      { path: "src/pkg/other.py", matchType: "fuzzy" },
     ],
   };
   const ranked = await rerank("find", { query: "foo.py" }, result, {
     systemOne: async (payload) => {
       assert.equal(payload.state.hits["src/pkg/foo.py"].matchType, "exact");
-        const answers = {};
+      const answers = {};
       for (const key of Object.keys(payload.questions)) {
-        if (key.startsWith("n")) {
-          answers[key] = {
-            type: "noul",
-            noul: key === "n1" ? 0.95 : 0.2,
-          };
-        } else {
-          answers[key] = { type: "score", score: key === "s1" ? 2 : 0.5 };
-        }
+        answers[key] = {
+          type: "noul",
+          noul: payload.state.hits[Object.keys(payload.state.hits)[Number(key.slice(1))]]
+            ?.path === "src/pkg/other.py"
+            ? 0.99
+            : 0.1,
+        };
       }
       return { answers };
     },
   });
+  assert.equal(ranked.results[0].path, "src/pkg/foo.py");
+  assert.equal(ranked.results[0].matchType, "exact");
   assert.deepEqual(
     ranked.results.map((item) => item.path),
-    ["src/pkg/foo.py", "src/pkg/foo_test.py"],
+    ["src/pkg/foo.py", "src/pkg/other.py", "src/pkg/foo_test.py"],
   );
-  assert.equal(ranked.results[0].matchType, "exact");
 });
 
 test("grep preserveOrder keeps Jev sequence on the map", () => {
@@ -192,8 +195,6 @@ test("grep preserveOrder keeps Jev sequence on the map", () => {
     root: "/repo",
     pattern: "render_widget",
     mode: "plain",
-    shown: 3,
-    moreRemain: false,
     preserveOrder: true,
     results: [
       {
@@ -217,15 +218,11 @@ test("grep preserveOrder keeps Jev sequence on the map", () => {
   assert.equal(formatted.text.includes("noul"), false);
 });
 
-test("graph fileOrder permutes open-files without dropping one", () => {
+test("graph candidates are entry spans and callees, not files", () => {
   const dump = [
     "Found 2 symbols across 2 files.",
     "",
-    "**`src/pkg/noise.py`** — helper(function)",
-    "",
-    "```python",
-    "1\tdef helper():",
-    "```",
+    "- `render_widget` (src/pkg/foo.py:14) — 1 caller",
     "",
     "**`src/pkg/foo.py`** — render_widget(function)",
     "",
@@ -236,15 +233,25 @@ test("graph fileOrder permutes open-files without dropping one", () => {
   const result = {
     status: "ready",
     root: "/repo",
-    query: "how does missing work",
+    query: "how does render_widget work",
     result: dump,
-    fileOrder: ["src/pkg/foo.py", "src/pkg/noise.py"],
+    symbols: [
+      {
+        name: "render_widget",
+        kind: "function",
+        path: "src/pkg/foo.py",
+        startLine: 14,
+        endLine: 22,
+        callees: [{ name: "layout", path: "src/pkg/layout.py", line: 1, endLine: 2 }],
+      },
+    ],
   };
   const candidates = extractCandidates("graph", { query: result.query }, result);
-  assert.equal(candidates.length, 2);
-  const formatted = formatMcpToolResult("graph", result);
-  const foo = formatted.text.indexOf("src/pkg/foo.py");
-  const noise = formatted.text.indexOf("src/pkg/noise.py");
-  assert.ok(foo > 0 && foo < noise, formatted.text);
-  assert.match(formatted.text, /open these files \(2\)/);
+  assert.deepEqual(
+    candidates.map((item) => item.kind),
+    ["entry", "callee"],
+  );
+  assert.equal(candidates[0].pinned, true);
+  assert.equal(candidates[0].anchor, "src/pkg/foo.py:14");
+  assert.equal(candidates[1].anchor, "src/pkg/layout.py:1");
 });

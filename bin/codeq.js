@@ -1,23 +1,19 @@
 #!/usr/bin/env node
 
 import { queryDaemon } from "../src/client.js";
-import {
-  formatMcpToolResult,
-  FULL_GREP_CONTEXT,
-  rootOrigin,
-} from "../src/mcp-format.js";
+import { formatMcpToolResult, rootOrigin } from "../src/mcp-format.js";
 import { runMcpServer } from "../src/mcp.js";
 import { maybeRerank } from "../src/jev.js";
 
 const USAGE = `Usage:
-  codeq [--root PATH] [--json|--full] find  <query>   [--path PATH] [--limit N]
-  codeq [--root PATH] [--json|--full] grep  <pattern> [--path PATH] [--glob GLOB] [--context N] [--limit N] [--fuzzy]
-  codeq [--root PATH] [--json|--full] graph <query>   [--path PATH]
+  codeq [--root PATH] [--json] find  <query>   [--path PATH] [--limit N]
+  codeq [--root PATH] [--json] grep  <pattern> [--path PATH] [--glob GLOB] [--context N] [--limit N] [--regex] [--fuzzy] [--cursor TOKEN]
+  codeq [--root PATH] [--json] graph <query>   [--path PATH]
   codeq mcp
 
-Human output is the same layer 0 map the MCP tools return: the resolved root on
-stderr, then the files to open next. --full adds layer 1 (graph source, grep
-context). --json stays the complete machine result and is unaffected by layers.`;
+Human output is the locator map the MCP tools return: the resolved root on
+stderr, then the files or spans to open next. --json is the daemon/diagnostic
+result (including explore dump and jev metadata) after the same rerank.`;
 
 const MCP_USAGE = `Usage:
   codeq mcp
@@ -62,7 +58,6 @@ function parseArguments(argv) {
     cwd: process.cwd(),
     cwdSource: "shell cwd",
     json: false,
-    full: false,
   };
   const positionals = [];
   const takesValue = new Set([
@@ -71,6 +66,7 @@ function parseArguments(argv) {
     "--limit",
     "--glob",
     "--context",
+    "--cursor",
   ]);
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -80,14 +76,20 @@ function parseArguments(argv) {
       options.json = true;
       continue;
     }
-    if (arg === "--full") {
-      options.full = true;
-      continue;
-    }
     if (arg === "--fuzzy") {
       if (command !== "grep") fail("--fuzzy is not valid for " + command);
       options.fuzzy = true;
       continue;
+    }
+    if (arg === "--regex") {
+      if (command !== "grep") fail("--regex is not valid for " + command);
+      options.regex = true;
+      continue;
+    }
+    if (arg === "--full" || arg === "--detail") {
+      fail(
+        "0.3.0 has no --full or --detail; replies are locators (use --json for the daemon dump)",
+      );
     }
     if (takesValue.has(arg)) {
       const value = argv[index + 1];
@@ -107,10 +109,10 @@ function parseArguments(argv) {
 
   const valid = {
     find: new Set(["root", "path", "limit"]),
-    grep: new Set(["root", "path", "glob", "context", "limit"]),
+    grep: new Set(["root", "path", "glob", "context", "limit", "cursor"]),
     graph: new Set(["root", "path"]),
   }[command];
-  for (const key of ["root", "path", "limit", "glob", "context"]) {
+  for (const key of ["root", "path", "limit", "glob", "context", "cursor"]) {
     if (options[key] !== undefined && !valid.has(key)) {
       fail(`--${key} is not valid for ${command}`);
     }
@@ -120,37 +122,39 @@ function parseArguments(argv) {
   }
   if (options.context !== undefined) {
     options.context = positiveInteger(options.context, "--context", true);
-  } else if (command === "grep" && options.full) {
-    options.context = FULL_GREP_CONTEXT;
   }
   return options;
 }
 
 function printStatus(result) {
-  const sync = result.lastSuccessfulSync
-    ? ` lastSuccessfulSync ${result.lastSuccessfulSync}`
-    : "";
+  const status = result.status || "unknown";
   const origin = rootOrigin(result);
   const via = origin ? ` via ${origin}` : "";
   const note = result.rootNote ? ` (${result.rootNote})` : "";
   const fuzzy = result.mode === "fuzzy" ? "[fuzzy]" : "";
-  process.stderr.write(
-    `[${result.status}]${fuzzy} root ${result.root}${via}${note}${sync}\n`,
-  );
-  if (result.warning) process.stderr.write(`warning: ${result.warning}\n`);
+  const stale =
+    status === "degraded" || status === "indexing"
+      ? `${
+          result.lastSuccessfulSync
+            ? ` lastSuccessfulSync ${result.lastSuccessfulSync}`
+            : ""
+        }`
+      : "";
+  process.stderr.write(`[${status}]${fuzzy} root ${result.root}${via}${note}${stale}\n`);
+  if ((status === "degraded" || status === "indexing") && result.warning) {
+    process.stderr.write(`warning: ${result.warning}\n`);
+  }
 }
 
-function printHuman(command, result, full) {
+function printHuman(command, result) {
   printStatus(result);
-  const formatted = formatMcpToolResult(command, result, {
-    detail: full ? "full" : "summary",
-  });
+  const formatted = formatMcpToolResult(command, result);
   process.stdout.write(`${formatted.map}\n`);
 }
 
 async function runCli(argv) {
   const request = parseArguments(argv);
-  const { json, full, ...wireRequest } = request;
+  const { json, ...wireRequest } = request;
   const controller = new AbortController();
   const cancel = () => {
     controller.abort();
@@ -167,13 +171,13 @@ async function runCli(argv) {
     },
   });
   process.removeListener("SIGINT", cancel);
+  const ranked = await maybeRerank(request.command, wireRequest, result);
   if (json) {
     process.stdout.write(
-      `${JSON.stringify({ command: request.command, ...result }, null, 2)}\n`,
+      `${JSON.stringify({ command: request.command, ...ranked }, null, 2)}\n`,
     );
   } else {
-    const ranked = await maybeRerank(request.command, wireRequest, result);
-    printHuman(request.command, ranked, full);
+    printHuman(request.command, ranked);
   }
 }
 

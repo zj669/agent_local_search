@@ -102,30 +102,45 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
     jsonrpc: "2.0",
     id: 5,
     method: "tools/call",
-    params: { name: "grep", arguments: { pattern: ".*" } },
+    params: { name: "grep", arguments: { pattern: ".*", regex: true } },
+  });
+  send({
+    jsonrpc: "2.0",
+    id: 9,
+    method: "tools/call",
+    params: {
+      name: "grep",
+      arguments: { pattern: "createSess.*", regex: true },
+    },
   });
   const find = await waitFor(messages, (message) => message.id === 2, 30_000);
-  const grep = await waitFor(messages, (message) => message.id === 3, 30_000);
+  const literalDots = await waitFor(messages, (message) => message.id === 3, 30_000);
   const graph = await waitFor(messages, (message) => message.id === 4, 120_000);
   const wildcard = await waitFor(messages, (message) => message.id === 5, 10_000);
+  const regexGrep = await waitFor(messages, (message) => message.id === 9, 30_000);
 
   const findPayload = find.result.structuredContent;
-  const grepPayload = grep.result.structuredContent;
+  const grepPayload = regexGrep.result.structuredContent;
   const graphPayload = graph.result.structuredContent;
 
   assert.equal(find.result.isError, undefined);
-  assert.equal(grep.result.isError, undefined);
+  assert.equal(regexGrep.result.isError, undefined);
   assert.equal(graph.result.isError, undefined, graph.result.content[0].text);
   assert.match(find.result.content[0].text, /^\[(ready|indexing|degraded)\]/);
   assert.match(find.result.content[0].text, /lastSuccessfulSync|root /);
-  assert.equal(findPayload.command, "find");
+  assert.equal(findPayload.command, undefined);
   assert.ok(findPayload.paths?.some((item) => item.endsWith("session.ts")));
   assert.match(find.result.content[0].text, /^src\/session\.ts$/m);
 
+  assert.equal(literalDots.result.isError, undefined);
+  assert.equal(literalDots.result.structuredContent.hits.length, 0);
+  assert.match(literalDots.result.content[0].text, /0 matches/);
+  assert.match(literalDots.result.content[0].text, /pass regex: true/);
+
   assert.ok(grepPayload.hits.some((item) => item.path.endsWith("session.ts")));
-  assert.equal(grepPayload.mode, "regex");
-  assert.equal(grepPayload.fuzzy, false);
-  assert.match(grep.result.content[0].text, /^src\/session\.ts:1:\d+ /m);
+  assert.equal("mode" in grepPayload, false);
+  assert.equal(regexGrep.result.content[0].text.includes("[fuzzy]"), false);
+  assert.match(regexGrep.result.content[0].text, /^src\/session\.ts:1:\d+ /m);
 
   const graphText = graph.result.content[0].text;
   assert.equal(graphText.includes("```"), false);
@@ -134,9 +149,12 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
   assert.equal(graphText.includes("codegraph_explore"), false);
   assert.match(graphText, /open these files/);
   assert.match(graphText, /createSession/);
-  assert.equal(graphPayload.sourceIncluded, false);
-  assert.ok(graphPayload.files.some((file) => file.path.endsWith("session.ts")));
-  assert.ok(graphPayload.paths.every((path) => !path.startsWith("../")));
+  assert.equal("sourceIncluded" in graphPayload, false);
+  assert.equal("files" in graphPayload, false);
+  assert.ok(
+    graphPayload.entries.some((entry) => entry.path.endsWith("session.ts")),
+  );
+  assert.ok(graphPayload.entries.every((entry) => !entry.path.startsWith("../")));
   assert.equal(wildcard.result.isError, true);
   assert.match(wildcard.result.content[0].text, /matches everything/);
 
@@ -161,20 +179,22 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
 
   const graphFull = await waitFor(messages, (message) => message.id === 6, 120_000);
   const fullText = graphFull.result.content[0].text;
-  assert.equal(graphFull.result.structuredContent.sourceIncluded, true);
-  assert.match(fullText, /```/);
-  assert.equal(fullText.includes("codegraph_explore"), false);
-  const mapOf = (text) => text.split("\n").slice(1).join("\n");
-  assert.equal(mapOf(fullText).startsWith(mapOf(graph.result.content[0].text)), true);
+  assert.equal("sourceIncluded" in graphFull.result.structuredContent, false);
+  assert.equal(fullText.includes("```"), false);
+  assert.equal(
+    fullText.split("\n").slice(1).join("\n"),
+    graph.result.content[0].text.split("\n").slice(1).join("\n"),
+  );
 
   const typo = await waitFor(messages, (message) => message.id === 7, 30_000);
-  assert.equal(typo.result.structuredContent.shown, 0);
+  assert.equal(typo.result.structuredContent.hits.length, 0);
   assert.equal(typo.result.content[0].text.split("\n")[0].includes("[fuzzy]"), false);
-  assert.match(typo.result.content[0].text, /0 matches, exact/);
-  assert.match(typo.result.content[0].text, /pass fuzzy: true/);
+  assert.match(typo.result.content[0].text, /0 matches/);
+  assert.match(typo.result.content[0].text, /pass regex: true/);
+  assert.match(typo.result.content[0].text, /fuzzy: true/);
 
   const approximate = await waitFor(messages, (message) => message.id === 8, 30_000);
-  assert.equal(approximate.result.structuredContent.mode, "fuzzy");
+  assert.equal("mode" in approximate.result.structuredContent, false);
   assert.match(approximate.result.content[0].text.split("\n")[0], /^\[\w+\]\[fuzzy\]/);
   assert.match(approximate.result.content[0].text, /DIFFERENT identifiers/);
 

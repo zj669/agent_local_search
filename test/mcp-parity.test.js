@@ -267,14 +267,16 @@ test(
     assert.equal(fileRoot.isError, false, fileRoot.text);
     assert.equal(fileRoot.text.includes("--root"), false, fileRoot.text);
     assert.equal(fileRoot.payload.root, repo);
-    assert.equal(fileRoot.payload.rootSource, "root");
-    assert.match(fileRoot.payload.rootNote, /root named a file/);
-    assert.match(fileRoot.payload.rootNote, /pass a file as path, not root/);
+    assert.equal("rootSource" in fileRoot.payload, false);
+    assert.equal("rootNote" in fileRoot.payload, false);
     assert.match(
       fileRoot.text.split("\n")[0],
       new RegExp(`root ${repo} via root argument \\(root named a file`),
     );
-    assert.deepEqual(fileRoot.payload.paths, ["src/leagent/policy_selector.py"]);
+    assert.deepEqual(
+      [...new Set(fileRoot.payload.hits.map((item) => item.path))],
+      ["src/leagent/policy_selector.py"],
+    );
 
     const cliFileRoot = cliJson(["--root", file, "grep", "SHARED_POLICY_TOKEN"], {
       cwd: repo,
@@ -300,12 +302,13 @@ test(
     });
     assert.equal(subdirectoryRoot.isError, false, subdirectoryRoot.text);
     assert.equal(subdirectoryRoot.payload.root, repo);
+    assert.equal("rootNote" in subdirectoryRoot.payload, false);
     assert.match(
-      subdirectoryRoot.payload.rootNote,
+      subdirectoryRoot.text.split("\n")[0],
       /root named a subdirectory, so it resolved to this repository narrowed to packages\/widget\//,
     );
     assert.match(
-      subdirectoryRoot.payload.rootNote,
+      subdirectoryRoot.text.split("\n")[0],
       /pass a subdirectory as path, not root/,
     );
     assert.match(
@@ -319,12 +322,12 @@ test(
       path: "packages/widget",
     });
     assert.equal(narrowed.payload.root, repo);
-    assert.equal(narrowed.payload.rootNote, null);
+    assert.equal("rootNote" in narrowed.payload, false);
     assert.deepEqual(narrowed.payload.paths, ["packages/widget/index.ts"]);
 
     const checkout = await session.call("find", { query: "index.ts", root: repo });
     assert.equal(checkout.payload.root, repo);
-    assert.equal(checkout.payload.rootNote, null);
+    assert.equal("rootNote" in checkout.payload, false);
 
     const missing = await session.call("find", {
       query: "index.ts",
@@ -459,8 +462,8 @@ test(
       true,
       mcpFindWt.text.split("\n")[0],
     );
-    assert.equal(mcpFindWt.payload.rootSource, "cwd");
-    assert.equal(mcpFindWt.payload.cwdSource, "spawn cwd");
+    assert.equal(mcpFindWt.payload.rootSource, undefined);
+    assert.equal(mcpFindWt.payload.cwdSource, undefined);
     assert.equal(cliFindWt.rootSource, "cwd");
     assert.equal(cliFindWt.cwdSource, "shell cwd");
     assert.match(
@@ -484,7 +487,7 @@ test(
       cwd: repoWt,
       env,
     });
-    assert.equal(mcpFindMain.payload.shown, 0);
+    assert.equal(mcpFindMain.payload.paths.length, 0);
     assert.equal(cliFindMain.total, 0);
 
     const mcpGrepWt = await session.call("grep", {
@@ -496,9 +499,9 @@ test(
     });
     assert.equal(mcpGrepWt.payload.root, repoWt);
     assert.equal(cliGrepWt.root, repoWt);
-    assert.ok(mcpGrepWt.payload.shown > 0);
-    assert.equal(mcpGrepWt.payload.shown, cliGrepWt.shown);
-    assert.equal(cliGrepWt.moreRemain, false);
+    assert.ok(mcpGrepWt.payload.hits.length > 0);
+    assert.equal(mcpGrepWt.payload.hits.length, cliGrepWt.shown);
+    assert.equal(cliGrepWt.nextCursor, null);
 
     const mcpGrepMain = await session.call("grep", {
       pattern: "ALPHA_MAIN_CHECKOUT_TOKEN",
@@ -507,7 +510,7 @@ test(
       cwd: repoWt,
       env,
     });
-    assert.equal(mcpGrepMain.payload.shown, 0);
+    assert.equal(mcpGrepMain.payload.hits.length, 0);
     assert.equal(cliGrepMain.shown, 0);
     assert.equal(cliGrepMain.mode, "plain");
 
@@ -535,17 +538,18 @@ test(
     assert.equal(/verbatim/i.test(graphText), false);
     assert.equal(graphText.includes("codegraph_explore"), false);
     assert.match(graphText, /open these files/);
-    assert.equal(mcpGraphWt.payload.sourceIncluded, false);
+    assert.equal("sourceIncluded" in mcpGraphWt.payload, false);
+    assert.equal("files" in mcpGraphWt.payload, false);
     assert.ok(
-      mcpGraphWt.payload.paths.some((path) =>
-        path.endsWith("AlphaWorktreeWidget.ts"),
+      mcpGraphWt.payload.entries.some((entry) =>
+        entry.path.endsWith("AlphaWorktreeWidget.ts"),
       ),
     );
     // --json is the machine anchor and stays the whole daemon result.
     assert.match(String(cliGraphWt.result), /AlphaWorktreeWidget/);
     assert.match(String(cliGraphWt.result), /Source Code/);
 
-    // Human CLI prints the same layer 0 map as MCP, not the engine dump.
+    // Human CLI prints the same locator map as MCP, not the engine dump.
     const cliGraphHuman = cli(
       ["graph", "alphaWorktreeBeacon AlphaWorktreeWidget"],
       { cwd: repoWt, env, timeout: 180_000 },
@@ -563,16 +567,8 @@ test(
       ["--full", "graph", "alphaWorktreeBeacon AlphaWorktreeWidget"],
       { cwd: repoWt, env, timeout: 180_000 },
     );
-    assert.equal(cliGraphFull.ok, true, cliGraphFull.stderr);
-    assert.match(cliGraphFull.stdout, /```/);
-    assert.equal(
-      cliGraphFull.stdout.startsWith(cliGraphHuman.stdout.trimEnd()),
-      true,
-    );
-    assert.deepEqual(
-      mcpGraphWt.payload.paths,
-      mcpGraphWt.payload.files.map((file) => file.path),
-    );
+    assert.equal(cliGraphFull.ok, false);
+    assert.match(cliGraphFull.stderr, /no --full or --detail/);
 
     const mcpFindB = await session.call("find", {
       query: "BetaUniqueModule",
@@ -589,7 +585,7 @@ test(
       true,
       mcpFindB.text.split("\n")[0],
     );
-    assert.equal(mcpFindB.payload.rootSource, "path");
+    assert.equal(mcpFindB.payload.rootSource, undefined);
     assert.equal(cliFindB.rootSource, "path");
     assert.deepEqual(
       mcpFindB.payload.paths.filter((path) => path.endsWith("UniqueModule.ts")),
@@ -605,7 +601,7 @@ test(
       path: repoB,
     });
     assert.equal(mcpGrepB.payload.root, repoB);
-    assert.ok(mcpGrepB.payload.shown > 0);
+    assert.ok(mcpGrepB.payload.hits.length > 0);
 
     const mcpFindC = await session.call("find", {
       query: "CharlieUniqueModule",
@@ -622,7 +618,7 @@ test(
       true,
       mcpFindC.text.split("\n")[0],
     );
-    assert.equal(mcpFindC.payload.rootSource, "root");
+    assert.equal(mcpFindC.payload.rootSource, undefined);
     assert.equal(cliFindC.rootSource, "root");
     assert.match(
       cliStatusLine(["find", "CharlieUniqueModule", "--root", repoC], {
@@ -657,17 +653,17 @@ test(
       ),
     );
     assert.equal(mcpDefaultBeta.payload.root, repoWt);
-    assert.equal(mcpDefaultBeta.payload.shown, 0);
+    assert.equal(mcpDefaultBeta.payload.paths.length, 0);
     assert.equal(mcpDefaultCharlie.payload.root, repoWt);
-    assert.equal(mcpDefaultCharlie.payload.shown, 0);
+    assert.equal(mcpDefaultCharlie.payload.hits.length, 0);
     for (const reply of [mcpDefault, mcpDefaultBeta, mcpDefaultCharlie]) {
       assert.equal(
         reply.text.split("\n")[0].includes(`root ${repoWt} via cwd (spawn cwd)`),
         true,
         reply.text.split("\n")[0],
       );
-      assert.equal(reply.payload.rootSource, "cwd");
-      assert.equal(reply.payload.cwdSource, "spawn cwd");
+      assert.equal(reply.payload.rootSource, undefined);
+      assert.equal(reply.payload.cwdSource, undefined);
     }
 
     noDotCodegraph(repoA, repoWt, repoB, repoC);
@@ -695,7 +691,7 @@ test(
     });
     assert.equal(homeFindB.isError, false, homeFindB.text);
     assert.equal(homeFindB.payload.root, repoB);
-    assert.equal(homeFindB.payload.rootSource, "path");
+    assert.equal(homeFindB.payload.rootSource, undefined);
     assert.ok(
       homeFindB.payload.paths.some((path) => path.endsWith("BetaUniqueModule.ts")),
     );
@@ -725,8 +721,8 @@ test(
       true,
       viaRoots.text.split("\n")[0],
     );
-    assert.equal(viaRoots.payload.rootSource, "cwd");
-    assert.equal(viaRoots.payload.cwdSource, "roots/list");
+    assert.equal(viaRoots.payload.rootSource, undefined);
+    assert.equal(viaRoots.payload.cwdSource, undefined);
     assert.ok(
       viaRoots.payload.paths.some((path) =>
         path.endsWith("AlphaWorktreeWidget.ts"),

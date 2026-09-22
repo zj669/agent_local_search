@@ -2,9 +2,9 @@
 
 MCP install for Claude Code, Codex, Gemini CLI, Cursor, 反重力 (`agy`), and OpenCode.
 
-包版本钉 **`@zj669/codeq@0.2.12`**。stdio 同时吃 LSP `Content-Length` 和 NDJSON，**不要再套一层 Python / bash 夹层**。Cursor 用官方包装器 `codeq-mcp`（只钉 Node 22.5–24、躲开 npx）；其它客户端用 `codeq mcp`。不要发明第二个包装器。
+包版本钉 **`@zj669/codeq@0.3.0`**。stdio 同时吃 LSP `Content-Length` 和 NDJSON，**不要再套一层 Python / bash 夹层**。Cursor 用官方包装器 `codeq-mcp`（只钉 Node 22.5–24、躲开 npx）；其它客户端用 `codeq mcp`。不要发明第二个包装器。
 
-下列安装命令在 2026-09-22 的 Linux VM 上对 **0.2.11** 跑过。**0.2.12** 的 MCP 入口没变；相对 `path` 接到这次选中的 `root`。请装 0.2.12。
+下列安装命令在 2026-09-22 的 Linux VM 上对 **0.2.11** 跑过。**0.3.0** 的 MCP 入口没变（仍是 `codeq mcp` / `codeq-mcp`）；相对 `path` 接到这次选中的 `root`。0.3.0 是 breaking：回包是 locator（没有 `detail:"full"`），grep 默认字面匹配。请装 0.3.0。
 
 ## 结论
 
@@ -28,7 +28,7 @@ Node：包装器 `codeq-mcp` 要求 **Node `>=22.5 <25`**（不要 26）。
 
 ```bash
 node -v    # 例如 v22.22.2；需要 22.5–24.x
-npm i -g @zj669/codeq@0.2.12
+npm i -g @zj669/codeq@0.3.0
 which codeq
 which codeq-mcp
 ```
@@ -74,7 +74,7 @@ no workspace (spawned from home). Pass path or root to a repository on this call
 | 参数 | 作用 |
 |---|---|
 | `root` | **选索引。** 仓库 / checkout / worktree 的绝对路径，只对这一次调用有效。 |
-| `path` | **收窄这一次搜索。** 目录或文件，例如 `src/pkg/foo.py`。不另开索引。相对路径接到这次选中的 `root`（0.2.12）；没有 `root` 时接到 session cwd。如果宿主已经把相对 path 扩成了另一棵 checkout 下的绝对路径，仍按同一相对 scope 接到这次的 `root`。不存在的 path 会报出拼好的绝对路径，不会悄悄搜整个仓。绝对路径逃出当前仓则换仓（更稳妥的做法是传 `root`）。 |
+| `path` | **收窄这一次搜索。** 目录或文件，例如 `src/pkg/foo.py`。不另开索引。相对路径接到这次选中的 `root`（0.3.0 与 0.2.12 相同）；没有 `root` 时接到 session cwd。如果宿主已经把相对 path 扩成了另一棵 checkout 下的绝对路径，仍按同一相对 scope 接到这次的 `root`。不存在的 path 会报出拼好的绝对路径，不会悄悄搜整个仓。绝对路径逃出当前仓则换仓（更稳妥的做法是传 `root`）。 |
 
 一次调用只用一个 root，**不做多仓结果融合**。下一调用不带路径，不会粘在上一次的 B 上。例子用 `src/pkg/foo.py`，不要把某一个仓库名写进工具描述。
 
@@ -90,7 +90,7 @@ no workspace (spawned from home). Pass path or root to a repository on this call
 { "query": "bar.py", "path": "/abs/path/to/B" }
 ```
 
-回包第一行会写 `[ready] root … via root argument` 或 `via path argument` 或 `via cwd (roots/list)`。对不上就再带 `root`。
+回包第一行会写 `[ready] root … via root argument` 或 `via path argument` 或 `via cwd (roots/list)`。对不上就再带 `root`。默认回包是 bounded locations（graph 的 `entries`/`callees`，grep 的 `hits`，find 的 `paths`），没有源码、没有 `detail`。grep 默认字面匹配，需要正则时显式 `regex: true`；翻页用绑定本次搜索的 opaque `cursor`。
 
 **不要：**
 

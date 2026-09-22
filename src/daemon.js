@@ -111,7 +111,7 @@ async function execute(request, socket) {
     if (request.command === "find") {
       return context.find(request.query, {
         constraint: routed.constraint,
-        limit: request.limit ?? 50,
+        limit: request.limit,
       });
     }
     if (request.command === "grep") {
@@ -119,8 +119,10 @@ async function execute(request, socket) {
         constraint: routed.constraint,
         glob: request.glob,
         context: request.context ?? 0,
-        limit: request.limit ?? 50,
+        limit: request.limit,
         fuzzy: Boolean(request.fuzzy),
+        regex: Boolean(request.regex),
+        cursor: request.cursor,
       });
     }
     if (request.command === "graph") {
