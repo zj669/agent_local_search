@@ -1,0 +1,376 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import test from "node:test";
+import { createCodeqExtension } from "../src/extension.js";
+import { formatMcpToolResult } from "../../src/mcp-format.js";
+
+const pkgRoot = fileURLToPath(new URL("..", import.meta.url));
+
+function readSrc(relative) {
+  return readFileSync(join(pkgRoot, relative), "utf8");
+}
+
+function mockPi() {
+  const tools = [];
+  const events = [];
+  return {
+    tools,
+    events,
+    registerTool(tool) {
+      tools.push(tool);
+    },
+    unregisterTool() {
+      throw new Error("unregisterTool must not be called");
+    },
+    on(event, handler) {
+      events.push({ event, handler });
+    },
+  };
+}
+
+function load(options = {}) {
+  const calls = [];
+  const query =
+    options.query ??
+    (async (request, extra) => {
+      calls.push({ request, extra });
+      return {
+        status: "ready",
+        root: request.root || request.cwd,
+        rootSource: request.root ? "root" : "cwd",
+        warning: null,
+        query: request.query,
+        pattern: request.query,
+        results: [],
+        result: "",
+      };
+    });
+  const pi = mockPi();
+  const factory = createCodeqExtension({
+    query,
+    format: options.format ?? formatMcpToolResult,
+    rerank: options.rerank,
+    fullGrepContext: options.fullGrepContext,
+  });
+  factory(pi);
+  const byName = Object.fromEntries(pi.tools.map((tool) => [tool.name, tool]));
+  return { pi, calls, byName };
+}
+
+test("package is a Pi extension named @zj669/codeq-pi", () => {
+  const pkg = JSON.parse(readSrc("package.json"));
+  assert.equal(pkg.name, "@zj669/codeq-pi");
+  assert.deepEqual(pkg.pi, { extensions: ["./src/index.ts"] });
+  assert.equal(pkg.keywords.includes("pi-package"), true);
+  assert.equal(pkg.dependencies["@zj669/codeq"], "0.2.12");
+  assert.equal(pkg.peerDependencies["@earendil-works/pi-coding-agent"], "*");
+  assert.equal(pkg.peerDependencies.typebox, "*");
+});
+
+test("default export registers tools without contacting the daemon", async () => {
+  const { default: factory } = await import("../src/index.ts");
+  assert.equal(typeof factory, "function");
+  const pi = mockPi();
+  factory(pi);
+  assert.deepEqual(
+    pi.tools.map((tool) => tool.name),
+    ["find", "grep", "graph"],
+  );
+});
+
+test("entry wires queryDaemon lazily and never FileFinder / pi-fff", () => {
+  const entry = readSrc("src/index.ts");
+  const extension = readSrc("src/extension.js");
+  const combined = `${entry}\n${extension}`;
+  assert.match(entry, /queryDaemon/);
+  assert.match(entry, /@zj669\/codeq\/src\/client\.js/);
+  assert.match(entry, /createCodeqExtension/);
+  assert.equal(combined.includes("FileFinder"), false);
+  assert.equal(combined.includes("@ff-labs/pi-fff"), false);
+  assert.equal(combined.includes("unregisterTool"), false);
+  assert.equal(combined.includes("CODEQ_CWD"), false);
+  assert.equal(combined.includes("--exclude-tools"), false);
+  assert.equal(combined.includes("leagent"), false);
+  assert.match(entry, /export default createCodeqExtension/);
+});
+
+test("factory registers grep, find, and graph only, without querying", async () => {
+  let queried = false;
+  const { pi } = load({
+    query: async () => {
+      queried = true;
+      return { status: "ready", results: [] };
+    },
+  });
+  assert.deepEqual(
+    pi.tools.map((tool) => tool.name),
+    ["find", "grep", "graph"],
+  );
+  assert.equal(pi.tools.length, 3);
+  assert.equal(queried, false);
+  assert.deepEqual(pi.events, []);
+  for (const tool of pi.tools) {
+    assert.equal(typeof tool.promptSnippet, "string");
+    assert.equal(Array.isArray(tool.promptGuidelines), true);
+    assert.equal(
+      tool.promptGuidelines.every((line) => line.includes(tool.name)),
+      true,
+    );
+    assert.match(tool.description, /codeq/i);
+  }
+  assert.match(pi.tools[0].description, /not Pi's builtin fd/);
+  assert.match(pi.tools[1].description, /not Pi's builtin rg/);
+});
+
+test("execute reads ctx.cwd on every call and never caches it", async () => {
+  const { calls, byName } = load();
+  let cwd = "/repos/alpha";
+  const ctx = {
+    get cwd() {
+      return cwd;
+    },
+  };
+  await byName.find.execute("1", { query: "foo.py" }, undefined, undefined, ctx);
+  cwd = "/repos/beta";
+  await byName.grep.execute(
+    "2",
+    { pattern: "TODO" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(calls[0].request.cwd, "/repos/alpha");
+  assert.equal(calls[0].request.command, "find");
+  assert.equal(calls[0].request.query, "foo.py");
+  assert.equal(calls[1].request.cwd, "/repos/beta");
+  assert.equal(calls[1].request.command, "grep");
+  assert.equal(calls[1].request.query, "TODO");
+});
+
+test("forwards path, root, limit, glob, fuzzy, and graph query", async () => {
+  const { calls, byName } = load();
+  const ctx = { cwd: "/session" };
+  await byName.find.execute(
+    "1",
+    { query: "foo.py", path: "src/", root: "/repos/app", limit: 8 },
+    undefined,
+    undefined,
+    ctx,
+  );
+  await byName.grep.execute(
+    "2",
+    {
+      pattern: "render",
+      path: "src/pkg",
+      glob: "**/*.ts",
+      fuzzy: true,
+      limit: 4,
+      context: 1,
+    },
+    undefined,
+    undefined,
+    ctx,
+  );
+  await byName.graph.execute(
+    "3",
+    { query: "how does render work", root: "/repos/app" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.deepEqual(calls[0].request, {
+    command: "find",
+    cwd: "/session",
+    query: "foo.py",
+    path: "src/",
+    root: "/repos/app",
+    limit: 8,
+  });
+  assert.deepEqual(calls[1].request, {
+    command: "grep",
+    cwd: "/session",
+    query: "render",
+    path: "src/pkg",
+    glob: "**/*.ts",
+    fuzzy: true,
+    context: 1,
+    limit: 4,
+  });
+  assert.deepEqual(calls[2].request, {
+    command: "graph",
+    cwd: "/session",
+    query: "how does render work",
+    root: "/repos/app",
+  });
+});
+
+test("grep detail full sets context when the caller omitted it", async () => {
+  const { calls, byName } = load({ fullGrepContext: 2 });
+  await byName.grep.execute(
+    "1",
+    { pattern: "foo", detail: "full" },
+    undefined,
+    undefined,
+    { cwd: "/session" },
+  );
+  assert.equal(calls[0].request.context, 2);
+  await byName.grep.execute(
+    "2",
+    { pattern: "foo", detail: "full", context: 0 },
+    undefined,
+    undefined,
+    { cwd: "/session" },
+  );
+  assert.equal(calls[1].request.context, 0);
+});
+
+test("prepareArguments maps builtin find pattern and strips @ / cwd", () => {
+  const { byName } = load();
+  assert.deepEqual(byName.find.prepareArguments({ pattern: "foo.py" }), {
+    query: "foo.py",
+  });
+  assert.deepEqual(
+    byName.find.prepareArguments({
+      query: "keep",
+      pattern: "drop",
+      path: "@src/",
+      cwd: "/tmp/ignored",
+    }),
+    { query: "keep", path: "src/" },
+  );
+  assert.deepEqual(
+    byName.grep.prepareArguments({
+      query: "TODO",
+      ignoreCase: true,
+      literal: true,
+      path: "@src/pkg/foo.py",
+    }),
+    { pattern: "TODO", path: "src/pkg/foo.py" },
+  );
+});
+
+test("content is the MCP/CLI map and details are not GrepToolDetails", async () => {
+  const { byName } = load({
+    query: async (request) => ({
+      status: "ready",
+      root: "/repos/app",
+      rootSource: "cwd",
+      warning: null,
+      query: request.query,
+      pattern: request.query,
+      results: [{ path: "src/pkg/foo.py", score: 1, matchType: "exact" }],
+      result: "",
+    }),
+  });
+  const result = await byName.find.execute(
+    "1",
+    { query: "foo.py" },
+    undefined,
+    undefined,
+    { cwd: "/repos/app" },
+  );
+  const expected = formatMcpToolResult(
+    "find",
+    {
+      status: "ready",
+      root: "/repos/app",
+      rootSource: "cwd",
+      warning: null,
+      query: "foo.py",
+      pattern: "foo.py",
+      results: [{ path: "src/pkg/foo.py", score: 1, matchType: "exact" }],
+      result: "",
+    },
+    { detail: "summary" },
+  );
+  assert.deepEqual(result.content, [{ type: "text", text: expected.text }]);
+  assert.equal(result.details.command, "find");
+  assert.equal(result.details.root, "/repos/app");
+  assert.equal("matches" in result.details, false);
+  assert.match(result.content[0].text, /^\[ready\]/);
+  assert.match(result.content[0].text, /src\/pkg\/foo\.py/);
+});
+
+test("passes abort signal through and returns isError on failure", async () => {
+  const controller = new AbortController();
+  const { byName } = load({
+    query: async (_request, { signal }) => {
+      assert.equal(signal, controller.signal);
+      throw new Error("daemon down");
+    },
+  });
+  const result = await byName.graph.execute(
+    "1",
+    { query: "how does foo work" },
+    controller.signal,
+    undefined,
+    { cwd: "/session" },
+  );
+  assert.equal(result.isError, true);
+  assert.equal(result.content[0].text, "daemon down");
+});
+
+test("execute uses ctx.cwd even if params.cwd is present", async () => {
+  const { calls, byName } = load();
+  await byName.find.execute(
+    "1",
+    { query: "foo.py", cwd: "/from-params" },
+    undefined,
+    undefined,
+    { cwd: "/from-session" },
+  );
+  assert.equal(calls[0].request.cwd, "/from-session");
+});
+
+test("missing session cwd is an error and does not query", async () => {
+  let queried = false;
+  const { byName } = load({
+    query: async () => {
+      queried = true;
+      return { status: "ready", results: [] };
+    },
+  });
+  const result = await byName.find.execute(
+    "1",
+    { query: "foo.py" },
+    undefined,
+    undefined,
+    { cwd: "  " },
+  );
+  assert.equal(queried, false);
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /ctx\.cwd/);
+});
+
+test("rerank runs before format, matching CLI/MCP", async () => {
+  const order = [];
+  const { byName } = load({
+    query: async () => {
+      order.push("query");
+      return { status: "ready", root: "/r", results: [{ path: "a.ts" }] };
+    },
+    rerank: async (name, request, result) => {
+      order.push(`rerank:${name}:${request.cwd}`);
+      return { ...result, results: [{ path: "ranked.ts" }] };
+    },
+    format: (name, result) => {
+      order.push(`format:${result.results[0].path}`);
+      return { text: result.results[0].path, structuredContent: { name } };
+    },
+  });
+  const result = await byName.find.execute(
+    "1",
+    { query: "a" },
+    undefined,
+    undefined,
+    { cwd: "/session" },
+  );
+  assert.deepEqual(order, [
+    "query",
+    "rerank:find:/session",
+    "format:ranked.ts",
+  ]);
+  assert.equal(result.content[0].text, "ranked.ts");
+});
