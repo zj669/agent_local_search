@@ -1009,4 +1009,33 @@ test("README default MCP snippet is the wrapper, no npx, no cwd field", () => {
   assert.equal(firstSnippet.includes("CODEQ_CWD"), false);
   assert.match(readme, /npx steals stdin/);
   assert.match(readme, /codeq-mcp/);
+  assert.match(readme, /@zj669\/codeq@0\.2\.12/);
+  assert.match(readme, /docs\/mcp-install\.md/);
+  assert.equal(readme.includes("leagent"), false);
+  assert.equal(readme.includes("npx -y"), false);
+});
+
+test("repo MCP install guide covers harness clients without a second wrapper", () => {
+  const guide = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "mcp-install.md"),
+    "utf8",
+  );
+  assert.match(guide, /@zj669\/codeq@0\.2\.12/);
+  assert.match(
+    guide,
+    /claude mcp add --scope user --transport stdio codeq -- codeq mcp/,
+  );
+  assert.match(guide, /codex mcp add codeq -- codeq mcp/);
+  assert.match(guide, /gemini mcp add -s user -t stdio codeq codeq mcp/);
+  assert.match(guide, /agy mcp add -t stdio codeq codeq mcp/);
+  assert.match(guide, /opencode mcp add codeq -- codeq mcp/);
+  assert.match(guide, /"command": "codeq-mcp"/);
+  assert.match(guide, /src\/pkg\/foo\.py/);
+  assert.match(guide, /相对路径接到这次选中的 `root`/);
+  assert.equal(guide.includes("leagent"), false);
+  assert.equal(guide.includes("npx -y"), false);
+  assert.equal(guide.includes('"command": "npx"'), false);
+  assert.equal(guide.includes("codeq-mcp-framing"), false);
+  assert.match(guide, /不要再套一层/);
+  assert.match(guide, /Do not set `CODEQ_CWD`|不要.*设 `CODEQ_CWD`/);
 });
