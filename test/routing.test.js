@@ -179,6 +179,93 @@ test("a relative path joins the selected root, not the session cwd", async () =>
   assert.equal(routed.source, "root");
 });
 
+function linkedWorktrees(parent) {
+  const main = repository(parent, "repo");
+  const wtA = join(parent, "wt-a");
+  const wtB = join(parent, "wt-b");
+  git(main, "worktree", "add", "-b", "tree-a", wtA, "main");
+  git(main, "worktree", "add", "-b", "tree-b", wtB, "main");
+  for (const [tree, marker] of [
+    [wtA, "a"],
+    [wtB, "b"],
+  ]) {
+    mkdirSync(join(tree, "src", "pkg"), { recursive: true });
+    writeFileSync(join(tree, "src", "pkg", "foo.py"), `TREE = "${marker}"\n`);
+  }
+  return {
+    wtA: realpathSync(wtA),
+    wtB: realpathSync(wtB),
+  };
+}
+
+test("cwd in worktree A, root worktree B, relative path=src/pkg searches B", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "codeq-wt-path-"));
+  const { wtA, wtB } = linkedWorktrees(parent);
+
+  const routed = await resolveRequestRoot({
+    cwd: wtA,
+    root: wtB,
+    path: "src/pkg",
+  });
+  assert.equal(routed.root, wtB);
+  assert.notEqual(routed.root, wtA);
+  assert.equal(routed.constraint, "src/pkg/");
+  assert.equal(routed.target, join(wtB, "src", "pkg"));
+  assert.equal(routed.source, "root");
+});
+
+test("missing relative path names the joined absolute path under the selected root", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "codeq-wt-missing-"));
+  const { wtA, wtB } = linkedWorktrees(parent);
+
+  await assert.rejects(
+    resolveRequestRoot({ cwd: wtA, root: wtB, path: "src/pkg/nope.py" }),
+    (error) => {
+      assert.match(error.message, /path not found: src\/pkg\/nope\.py/);
+      assert.ok(
+        error.message.includes(join(wtB, "src", "pkg", "nope.py")),
+        error.message,
+      );
+      assert.equal(
+        error.message.includes(join(wtA, "src", "pkg", "nope.py")),
+        false,
+        error.message,
+      );
+      assert.equal(error.message.includes("--root"), false);
+      assert.equal(error.message.includes("--path"), false);
+      return true;
+    },
+  );
+});
+
+test("a file as root on a worktree is the enclosing worktree plus that file", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "codeq-wt-file-root-"));
+  const { wtA, wtB } = linkedWorktrees(parent);
+  const file = join(wtB, "src", "pkg", "foo.py");
+
+  const routed = await resolveRequestRoot({ cwd: wtA, root: file });
+  assert.equal(routed.root, wtB);
+  assert.notEqual(routed.root, wtA);
+  assert.equal(routed.constraint, "src/pkg/foo.py");
+  assert.equal(routed.source, "root");
+  assert.match(routed.note, /root named a file/);
+  assert.equal(JSON.stringify(routed).includes("--root"), false);
+});
+
+test("an absolute path under the session cwd still scopes the selected root", async () => {
+  const parent = mkdtempSync(join(tmpdir(), "codeq-wt-abs-path-"));
+  const { wtA, wtB } = linkedWorktrees(parent);
+
+  const routed = await resolveRequestRoot({
+    cwd: wtA,
+    root: wtB,
+    path: join(wtA, "src", "pkg"),
+  });
+  assert.equal(routed.root, wtB);
+  assert.equal(routed.constraint, "src/pkg/");
+  assert.equal(routed.target, join(wtB, "src", "pkg"));
+});
+
 test("a path that does not exist is an error naming the joined absolute path", async () => {
   const repo = realpathSync(mkdtempSync(join(tmpdir(), "codeq-missing-path-")));
   mkdirSync(join(repo, "src"), { recursive: true });

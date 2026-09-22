@@ -23,7 +23,7 @@ const ROOTS_LIST_TIMEOUT_MS = 5_000;
 const PATH_PROPERTY = {
   type: "string",
   description:
-    "Narrow this one call inside the selected repository: a directory (src/, profiles/app) or a single file (src/pkg/foo.py). This is the only way to scope a search, and it never creates or switches an index: every path in a repository reuses that repository's one index. A relative path is joined to root when root is passed, otherwise to the session cwd; absolute, ~/, and ../ paths that leave the workspace switch to that repository, but prefer root for that. A path that does not exist is an error that names the absolute path tried, not a silent search of the whole repository. Each call uses exactly one root.",
+    "Narrow this one call inside the selected repository: a directory (src/, profiles/app) or a single file (src/pkg/foo.py). This is the only way to scope a search, and it never creates or switches an index: every path in a repository reuses that repository's one index. A relative path is joined to root when root is passed, otherwise to the session cwd — even when the cwd is another checkout or worktree of the same repository. Absolute, ~/, and ../ paths that leave the workspace switch to that repository, but prefer root for that: if root is set, an absolute path under the session cwd or another checkout is still treated as a path inside that root. A path that does not exist is an error that names the absolute path tried, not a silent search of the whole repository. Each call uses exactly one root.",
 };
 
 const ROOT_PROPERTY = {

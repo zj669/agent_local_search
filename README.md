@@ -214,7 +214,7 @@ npm install -g https://github.com/zj669/agent_local_search/archive/refs/heads/ma
 To pin the current GitHub release instead:
 
 ```bash
-npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.11.tar.gz
+npm install -g https://github.com/zj669/agent_local_search/archive/refs/tags/v0.2.12.tar.gz
 ```
 
 ## Commands

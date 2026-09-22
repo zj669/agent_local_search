@@ -265,6 +265,7 @@ test(
       root: file,
     });
     assert.equal(fileRoot.isError, false, fileRoot.text);
+    assert.equal(fileRoot.text.includes("--root"), false, fileRoot.text);
     assert.equal(fileRoot.payload.root, repo);
     assert.equal(fileRoot.payload.rootSource, "root");
     assert.match(fileRoot.payload.rootNote, /root named a file/);

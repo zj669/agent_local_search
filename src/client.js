@@ -1,23 +1,81 @@
 import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock } from "./lock.js";
 import { daemonPaths } from "./paths.js";
 import { openSocket, socketIsLive } from "./socket.js";
 
+const require = createRequire(import.meta.url);
+const { version } = require("../package.json");
+
 const START_LOCK_TIMEOUT_MS = 30_000;
+const STOP_WAIT_MS = 50;
 
 // Concurrent cold tool calls used to spawn one daemon each; they then raced to
 // bind the socket and to migrate the same CodeGraph database ("database is
 // locked"). One launch per process, everyone else waits for it.
 let launching = null;
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function readDaemonPackageVersion(paths) {
+  try {
+    const stamped = readFileSync(paths.packageVersion, "utf8").trim();
+    if (stamped) return stamped;
+  } catch {}
+  try {
+    const registry = JSON.parse(readFileSync(paths.registry, "utf8"));
+    return typeof registry.version === "string" ? registry.version : null;
+  } catch {
+    return null;
+  }
+}
+
+function daemonPid(paths) {
+  try {
+    const pid = Number(readFileSync(paths.pid, "utf8").trim());
+    return Number.isInteger(pid) && pid > 1 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+async function daemonIsCurrent(paths) {
+  if (!(await socketIsLive(paths.socket))) return false;
+  return readDaemonPackageVersion(paths) === version;
+}
+
+async function stopDaemon(paths) {
+  const pid = daemonPid(paths);
+  if (pid) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {}
+  }
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if (!(await socketIsLive(paths.socket))) return;
+    await sleep(STOP_WAIT_MS);
+  }
+  if (pid) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {}
+  }
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (!(await socketIsLive(paths.socket))) return;
+    await sleep(STOP_WAIT_MS);
+  }
+}
+
 export async function connectDaemon() {
   const paths = daemonPaths();
-  try {
-    return await openSocket(paths.socket);
-  } catch {}
+  if (await daemonIsCurrent(paths)) {
+    return openSocket(paths.socket);
+  }
 
   if (!launching) {
     launching = ensureDaemon(paths).finally(() => {
@@ -30,17 +88,22 @@ export async function connectDaemon() {
 
 // One launch per process is not enough: several MCP servers and CLI invocations
 // share one user-level daemon, so the autostart also has to be single across
-// processes. Only the startup window is locked.
+// processes. Only the startup window is locked. A live socket from an older
+// package is not current: path join and file-as-root live in the daemon, so an
+// upgrade has to replace that process or 0.2.8's contract never takes effect.
 async function ensureDaemon(paths) {
-  const live = () => socketIsLive(paths.socket);
+  const current = () => daemonIsCurrent(paths);
   const held = await acquireLock(paths.startLock, {
     timeoutMs: START_LOCK_TIMEOUT_MS,
     label: "daemon autostart",
-    shortCircuit: live,
+    shortCircuit: current,
   });
   if (!held.release) return;
   try {
-    if (await live()) return;
+    if (await current()) return;
+    if (await socketIsLive(paths.socket)) {
+      await stopDaemon(paths);
+    }
     await launchDaemon(paths);
   } finally {
     held.release();

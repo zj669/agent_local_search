@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { promisify } from "node:util";
@@ -19,6 +20,7 @@ import { daemonPaths } from "../src/paths.js";
 
 const execFileAsync = promisify(execFile);
 const bin = fileURLToPath(new URL("../bin/codeq.js", import.meta.url));
+const { version } = createRequire(import.meta.url)("../package.json");
 
 function repository(parent, name) {
   const root = join(parent, name);
@@ -107,6 +109,7 @@ test(
       readFileSync(join(dataDir, "daemon", "registry.json"), "utf8"),
     );
     assert.equal(registry.roots.length, 1);
+    assert.equal(registry.version, version);
     assert.equal(existsSync(join(dataDir, "daemon", "autostart.lock")), false);
     assert.equal(existsSync(join(dataDir, "daemon", "bind.lock")), false);
 

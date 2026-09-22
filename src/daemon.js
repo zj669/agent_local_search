@@ -3,11 +3,15 @@
 import { createServer } from "node:net";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { acquireLock } from "./lock.js";
 import { daemonPaths, resolveRequestRoot, rootBucket } from "./paths.js";
 import { RootContext } from "./root-context.js";
 import { socketIsLive } from "./socket.js";
+
+const require = createRequire(import.meta.url);
+const { version } = require("../package.json");
 
 const CWD_SOURCES = new Set([
   "roots/list",
@@ -32,6 +36,7 @@ await mkdir(dirname(paths.log), { recursive: true });
 async function persistRegistry() {
   const value = {
     pid: process.pid,
+    version,
     socket: paths.socket,
     startedAt: new Date(process.uptime() ? Date.now() - process.uptime() * 1_000 : Date.now()).toISOString(),
     roots: [...roots.values()].map((entry) => ({
@@ -40,6 +45,7 @@ async function persistRegistry() {
       lastAccessedAt: new Date(entry.lastAccess).toISOString(),
     })),
   };
+  await writeFile(paths.packageVersion, `${version}\n`);
   await writeFile(paths.registry, `${JSON.stringify(value, null, 2)}\n`);
 }
 
@@ -195,6 +201,9 @@ try {
     if (process.platform !== "win32" && existsSync(paths.socket)) {
       await rm(paths.socket, { force: true });
     }
+    // Stamp the package version before the socket exists so a client that sees
+    // a live socket can tell this process from an older daemon.
+    await writeFile(paths.packageVersion, `${version}\n`);
     await new Promise((resolve, reject) => {
       const onError = (error) => reject(error);
       server.once("error", onError);
@@ -204,6 +213,7 @@ try {
       });
     });
     await writeFile(paths.pid, `${process.pid}\n`);
+    await persistRegistry();
   }
 } catch (error) {
   outcome =
