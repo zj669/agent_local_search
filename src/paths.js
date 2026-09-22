@@ -30,6 +30,7 @@ export function daemonPaths(base = dataHome()) {
     socket,
     pid: join(daemonDir, "daemon.pid"),
     registry: join(daemonDir, "registry.json"),
+    packageVersion: join(daemonDir, "package-version"),
     log: join(daemonDir, "logs", "daemon.log"),
     startLock: join(daemonDir, "autostart.lock"),
     bindLock: join(daemonDir, "bind.lock"),
@@ -54,6 +55,40 @@ function expandPath(value, cwd) {
     return join(homedir(), value.slice(2));
   }
   return isAbsolute(value) ? resolve(value) : resolve(cwd, value);
+}
+
+function looksRelative(value) {
+  const text = String(value);
+  if (
+    text === "~" ||
+    text.startsWith("~/") ||
+    text.startsWith("~\\") ||
+    text.startsWith(`~${sep}`)
+  ) {
+    return false;
+  }
+  return !isAbsolute(text);
+}
+
+// When root is set, a relative path always joins that root. Hosts and older
+// daemons sometimes expand the same relative path against the session cwd or
+// another checkout first; recover the relative suffix and join it onto root.
+async function resolveScopedPath(pathValue, pathBase, cwd, { rejoinOutside = false } = {}) {
+  if (looksRelative(pathValue)) {
+    return expandPath(pathValue, pathBase);
+  }
+  const absolute = expandPath(pathValue, cwd);
+  if (!rejoinOutside) return absolute;
+  const base = canonical(pathBase);
+  const resolved = canonical(absolute);
+  if (contains(base, resolved)) return absolute;
+  const origin = contains(cwd, resolved)
+    ? cwd
+    : (await gitRoot(resolved)) || (await gitRoot(existingDirectory(absolute)));
+  if (!origin) return absolute;
+  const rel = relative(canonical(origin), resolved);
+  if (rel.startsWith("..") || isAbsolute(rel)) return absolute;
+  return rel === "" ? pathBase : resolve(pathBase, rel);
 }
 
 function existingDirectory(input) {
@@ -168,7 +203,11 @@ export async function resolveRequestRoot(request) {
     }
   }
 
-  const targetAbsolute = request.path ? expandPath(request.path, pathBase) : pathBase;
+  const targetAbsolute = request.path
+    ? await resolveScopedPath(request.path, pathBase, cwd, {
+        rejoinOutside: Boolean(request.root),
+      })
+    : pathBase;
   if (request.path && !existsSync(targetAbsolute)) {
     throw new Error(
       `path not found: ${request.path} resolved to ${targetAbsolute}, which does not exist. ` +
