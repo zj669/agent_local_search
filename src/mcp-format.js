@@ -7,6 +7,7 @@ import {
   GREP_CAP,
   MATCH_TEXT_CHARS,
 } from "./limits.js";
+import { identifierAt, rankGrepHits } from "./path-tier.js";
 
 export const MCP_INSTRUCTIONS = `codeq is local find, grep, and graph for one repository at a time. Indexes are created automatically on first use. Never ask the user to init, never write a .codegraph directory into the project, and never merge results across repositories.
 
@@ -90,83 +91,9 @@ function looksLikeRegexWildcards(pattern) {
   return /\.\*|\.\+/.test(String(pattern || ""));
 }
 
-function identifierAt(text, column) {
-  const line = String(text ?? "");
-  const index = Math.max(0, Math.min(line.length - 1, (column || 1) - 1));
-  if (!/[A-Za-z0-9_$]/.test(line[index] || "")) return null;
-  let start = index;
-  let end = index;
-  while (start > 0 && /[A-Za-z0-9_$]/.test(line[start - 1])) start -= 1;
-  while (end < line.length - 1 && /[A-Za-z0-9_$]/.test(line[end + 1])) end += 1;
-  return line.slice(start, end + 1);
-}
-
-function escapeRegExp(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function isPreferredHit(hit, pattern) {
-  const raw = String(hit.text ?? "");
-  const text = raw.trim();
-  const at = identifierAt(raw, hit.column);
-  const ident = at || (!/[.*+?^${}()|[\]\\]/.test(pattern) ? pattern : null);
-  if (!ident) {
-    return /^(?:export\s+)?(?:async\s+)?(?:def|function|func|fn|class|const|let|var|val|interface|struct|type|enum)\b/.test(
-      text,
-    );
-  }
-  const name = escapeRegExp(ident);
-  if (
-    new RegExp(
-      `(?:^|\\s)(?:async\\s+)?(?:def|function|func|fn|fun|class|interface|struct|trait|type|enum|const|let|var|val)\\s+${name}\\b`,
-    ).test(text)
-  ) {
-    return true;
-  }
-  if (new RegExp(`(?:^|[^\\w$])${name}\\s*=(?!=)`).test(text)) return true;
-  if (new RegExp(`(?:^|[^\\w$])${name}\\s*:(?!:)`).test(text)) return true;
-  return false;
-}
-
 function orderGrepHits(hits, pattern, preserveOrder) {
   if (preserveOrder) return hits;
-  const groups = [];
-  const index = new Map();
-  for (const hit of hits) {
-    if (!index.has(hit.path)) {
-      index.set(hit.path, groups.length);
-      groups.push({ path: hit.path, hits: [] });
-    }
-    groups[index.get(hit.path)].hits.push(hit);
-  }
-  const preferredAny = hits.some((hit) => isPreferredHit(hit, pattern));
-  if (!preferredAny) {
-    return groups.flatMap((group) => group.hits);
-  }
-  const fileOrder = [];
-  const seen = new Set();
-  for (const hit of hits) {
-    if (!isPreferredHit(hit, pattern) || seen.has(hit.path)) continue;
-    seen.add(hit.path);
-    fileOrder.push(hit.path);
-  }
-  for (const hit of hits) {
-    if (seen.has(hit.path)) continue;
-    seen.add(hit.path);
-    fileOrder.push(hit.path);
-  }
-  const ordered = [];
-  for (const path of fileOrder) {
-    const group = groups[index.get(path)];
-    const preferred = group.hits
-      .filter((hit) => isPreferredHit(hit, pattern))
-      .sort((a, b) => a.line - b.line);
-    const rest = group.hits
-      .filter((hit) => !isPreferredHit(hit, pattern))
-      .sort((a, b) => a.line - b.line);
-    ordered.push(...preferred, ...rest);
-  }
-  return ordered;
+  return rankGrepHits(hits, pattern);
 }
 
 function appendHits(lines, hits) {

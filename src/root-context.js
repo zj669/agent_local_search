@@ -6,13 +6,15 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { FileFinder } from "@ff-labs/fff-node";
 import {
-  encodeGrepCursor,
+  encodeNextGrepCursor,
   grepCursorOffset,
   openGrepCursor,
+  toFffCursor,
 } from "./grep-cursor.js";
 import { assertGrepPattern } from "./grep-mode.js";
 import { acquireLock } from "./lock.js";
-import { FIND_CAP, GREP_CAP, pageLimit } from "./limits.js";
+import { RANK_WINDOW } from "./limits.js";
+import { applyFindWindow, applyGrepWindow } from "./path-tier.js";
 import { rootBucket } from "./paths.js";
 import { planFindSearch, runFindSearch } from "./find-glob.js";
 
@@ -301,23 +303,24 @@ export class RootContext {
     const plan = planFindSearch(query, options.constraint);
     const { value, globFallback } = runFindSearch(plan, (needle) =>
       unwrap(
-        finder.fileSearch(needle, { pageSize: pageLimit(options.limit, FIND_CAP) }),
+        finder.fileSearch(needle, { pageSize: RANK_WINDOW }),
         "FFF file search failed",
       ),
     );
+    const mapped = value.items.map((item, index) => ({
+      path: item.relativePath,
+      size: item.size,
+      modified: item.modified,
+      gitStatus: item.gitStatus,
+      score: value.scores[index]?.total ?? null,
+      matchType: value.scores[index]?.matchType ?? null,
+    }));
     return {
       ...this.metadata(),
       query,
       total: value.totalMatched,
       indexed: value.totalFiles ?? null,
-      results: value.items.map((item, index) => ({
-        path: item.relativePath,
-        size: item.size,
-        modified: item.modified,
-        gitStatus: item.gitStatus,
-        score: value.scores[index]?.total ?? null,
-        matchType: value.scores[index]?.matchType ?? null,
-      })),
+      results: applyFindWindow(mapped, options.limit),
       ...(globFallback ? { globFallback } : {}),
     };
   }
@@ -342,14 +345,18 @@ export class RootContext {
     const grepOptions = {
       mode,
       smartCase: true,
-      pageSize: pageLimit(options.limit, GREP_CAP),
+      pageSize: RANK_WINDOW,
       beforeContext: options.context ?? 0,
       afterContext: options.context ?? 0,
     };
+    let windowStart = 0;
+    let rankedOffset = 0;
     if (options.cursor) {
       const opened = openGrepCursor(options.cursor, search);
       grepOptions.mode = opened.mode;
-      grepOptions.cursor = opened.cursor;
+      windowStart = opened.window;
+      rankedOffset = opened.offset;
+      if (windowStart > 0) grepOptions.cursor = toFffCursor(windowStart);
     }
     let value = unwrap(finder.grep(query, grepOptions), "FFF content search failed");
     let usedFuzzy = grepOptions.mode === "fuzzy";
@@ -374,10 +381,30 @@ export class RootContext {
         usedFuzzy = true;
       }
     }
+    const mapped = value.items.map((item) => ({
+      path: item.relativePath,
+      line: item.lineNumber,
+      column: item.col + 1,
+      text: item.lineContent,
+      contextBefore: item.contextBefore || [],
+      contextAfter: item.contextAfter || [],
+    }));
+    const { ranked, page } = applyGrepWindow(
+      mapped,
+      pattern,
+      options.limit,
+      rankedOffset,
+    );
     const pageMode = usedFuzzy ? "fuzzy" : grepOptions.mode;
-    const nextCursor = encodeGrepCursor(
+    const nextCursor = encodeNextGrepCursor(
       { ...search, mode: pageMode },
-      grepCursorOffset(value.nextCursor),
+      {
+        rankedLength: ranked.length,
+        offset: rankedOffset,
+        pageLength: page.length,
+        windowStart,
+        fffNextOffset: grepCursorOffset(value.nextCursor),
+      },
     );
     return {
       ...this.metadata(),
@@ -385,16 +412,9 @@ export class RootContext {
       mode: pageMode,
       regex,
       fuzzyRequested,
-      shown: value.items.length,
+      shown: page.length,
       nextCursor,
-      results: value.items.map((item) => ({
-        path: item.relativePath,
-        line: item.lineNumber,
-        column: item.col + 1,
-        text: item.lineContent,
-        contextBefore: item.contextBefore || [],
-        contextAfter: item.contextAfter || [],
-      })),
+      results: page,
     };
   }
 
