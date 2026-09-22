@@ -332,27 +332,8 @@ export function resolveEntries(dump, identifiers, symbols = []) {
       callees: span?.callees || [],
     });
   }
-  if (entries.length > 0) return entries.slice(0, ENTRY_CAP);
-
-  const ranked = rankFiles(dump, hits, identifiers);
-  for (const file of ranked.files) {
-    if (entries.length >= ENTRY_CAP) break;
-    const primary = file.symbols[0];
-    const named = primary ? byName.get(primary.name.toLowerCase()) : null;
-    const onPath = [...byName.values()].find((span) => span.path === file.path);
-    const chosen = named || onPath;
-    const start = chosen?.startLine || file.renderedLines?.[0];
-    const end = chosen?.endLine || file.renderedLines?.[1] || start;
-    push({
-      symbol: chosen?.name || primary?.name || file.path,
-      path: file.path,
-      startLine: start,
-      endLine: end,
-      kind: chosen?.kind || primary?.kind || null,
-      pinned: false,
-      callees: chosen?.callees || [],
-    });
-  }
+  // No exact hit: do not promote engine-ranked spans into reading entries.
+  // Those locations are not this query's next Read.
   return entries.slice(0, ENTRY_CAP);
 }
 

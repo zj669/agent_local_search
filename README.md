@@ -5,7 +5,7 @@ server, and a per-user daemon. Three tools only — not a fourth. Navigation, no
 Read: replies are bounded locations to open next.
 
 ```bash
-npm i -g @zj669/codeq@0.3.0
+npm i -g @zj669/codeq@0.3.1
 ```
 
 Needs **Node 22.5–24** (not 26). **Do not use `npx`** — npx steals stdin and
@@ -82,7 +82,7 @@ indexed.
 ```
 
 Every reply's first line names the resolved root (`via root argument` /
-`via path argument` / `via cwd`). Wrong tree → retry with `root`.
+`via path argument` / `via cwd:…`). Wrong tree → retry with `root`.
 
 Default replies are locators (no source). There is no `detail:"full"` and no
 `--full`. `grep` is a **literal** by default; `regex: true` / `--regex` is

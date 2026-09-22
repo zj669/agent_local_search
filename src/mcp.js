@@ -19,23 +19,17 @@ const ROOTS_LIST_TIMEOUT_MS = 5_000;
 const PATH_PROPERTY = {
   type: "string",
   description:
-    "Narrow this one call inside the selected repository: a directory (src/, profiles/app) or a single file (src/pkg/foo.py). This is the only way to scope a search, and it never creates or switches an index: every path in a repository reuses that repository's one index. A relative path is joined to root when root is passed, otherwise to the session cwd — even when the cwd is another checkout or worktree of the same repository. Absolute, ~/, and ../ paths that leave the workspace switch to that repository, but prefer root for that: if root is set, an absolute path under the session cwd or another checkout is still treated as a path inside that root. A path that does not exist is an error that names the absolute path tried, not a silent search of the whole repository. Each call uses exactly one root.",
+    "Narrow this call inside the selected root; never selects an index. Relative paths are relative to that root.",
 };
 
 const ROOT_PROPERTY = {
   type: "string",
   description:
-    "Absolute path of the repository, checkout, or worktree to search, for this call only, overriding Git/cwd detection. Pass it whenever the repository you are asking about is not the session cwd: a second clone, another checkout or worktree, or any repository when the server was spawned from $HOME. Omitting it searches the session cwd (Git/cwd detection), which is the wrong tree when your question is about another repository. path never creates or switches an index: every path in a repository reuses that repository's one index. A subdirectory or a file passed as root resolves to the repository that holds it, narrowed to that subdirectory or file, and says so in the reply. To scope a search, keep root at the checkout and pass path. Every reply names the resolved root and where it came from; if that root is not the repository you meant, retry with root.",
+    "Repository/checkout/worktree for this call; overrides cwd/Git detection. Set it for cross-repo/worktree queries.",
 };
 
 export const NO_WORKSPACE_ERROR =
   "no workspace (spawned from home). Pass path or root to a repository on this call.";
-
-const CWD_PROPERTY = {
-  type: "string",
-  description:
-    "Working directory for resolving relative path/root. Defaults to the MCP client's session workspace (roots/list) or process.cwd() when that is a real project, not $HOME or /.",
-};
 
 const LIMIT_PROPERTY = {
   type: "integer",
@@ -50,25 +44,24 @@ const LOCATOR_SCHEMA = {
 };
 
 const OUTPUT_SCHEMA_NOTE =
-  "Machine navigation only. The text block is self-contained and is NOT a serialized copy of this object: codeq deliberately does not repeat the JSON in the text channel (MCP 2025-06-18 SHOULD). A client that ignores structuredContent still has every retrieval fact it needs to choose the next Read; it only loses machine navigation, pagination, and diagnostics.";
+  "Text has the retrieval facts; ignoring this object only loses machine navigation, pagination, and diagnostics.";
 
 const TOOLS = [
   {
     name: "find",
     title: "Find files",
     description:
-      "Find files by name or path using the local codeq index (FFF). Indexes the selected root automatically on first use; never ask the user to init or create a project-local index. Pass root to search a different repository and path to narrow inside one. Each call uses exactly one root; results from multiple repositories are never merged.",
+      "Fuzzy file/path lookup, including dotfiles. Query is a path fragment, not a glob.",
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
           description:
-            "File name or path fragment, matched fuzzily against every indexed path, for example foo.py, profiles/app, profile, or SKILL.md. Dotfiles and dot-directories such as .claude/skills and .cursor/rules are indexed, so look for skills and rules here instead of a native glob tool. Glob syntax is not supported: **/*profile* matches nothing, pass profile instead.",
+            "Path fragment, matched fuzzily (foo.py, profiles/app, SKILL.md). Not a glob: **/*profile* matches nothing, pass profile. Dotfiles are indexed.",
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
-        cwd: CWD_PROPERTY,
         limit: LIMIT_PROPERTY,
       },
       required: ["query"],
@@ -92,18 +85,17 @@ const TOOLS = [
     name: "grep",
     title: "Search file contents",
     description:
-      "Search file contents using the local codeq index (FFF). Default matching is a literal string — this is not rg. Pass regex true for a regular expression. All-match patterns like .* are rejected when regex is on. Matching is exact by default: zero hits means zero hits, and nothing is silently re-run as fuzzy. Pass fuzzy true to also accept approximate names; those replies are labelled [fuzzy] on the first line and name DIFFERENT identifiers. Indexes the selected root automatically on first use; never ask the user to init. Pass root to search a different repository and path to narrow inside one. Each call uses exactly one root; results from multiple repositories are never merged.",
+      "Literal string search by default; this is not rg. Pass regex:true for a regular expression, fuzzy:true for approximate/different identifiers. Returns matching lines.",
     inputSchema: {
       type: "object",
       properties: {
         pattern: {
           type: "string",
           description:
-            "One identifier or one literal string, for example focus_item_sources. This is not rg: dots, brackets, and $ are literal unless regex is true. Search one name per call instead of an or-chain of unrelated names.",
+            "literal string by default. This is not rg: dots, brackets, and $ are literal unless regex is true.",
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
-        cwd: CWD_PROPERTY,
         glob: {
           type: "string",
           description: "Optional glob used to constrain matches, for example **/*.ts",
@@ -116,7 +108,7 @@ const TOOLS = [
         fuzzy: {
           type: "boolean",
           description:
-            "Default false. When the exact pattern has zero hits, also try approximate matching. Those results are NOT the same identifier — the reply is labelled [fuzzy] and names what it actually matched, so confirm the spelling before concluding anything from them. Leave it off when you know the identifier.",
+            "Default false. Approximate matching for different identifiers, labelled [fuzzy]. NOT the same identifier.",
         },
         cursor: {
           type: "string",
@@ -158,18 +150,17 @@ const TOOLS = [
     name: "graph",
     title: "Explore the code graph",
     description:
-      "Explore related symbols and files with CodeGraph explore. Use this for call chains and pipelines (tracing which functions run from an entry point): it returns recommended reading entries — the query symbol's own span (start–end of that function or class, not the whole file) when that identifier hits, otherwise an engine-selected span — and its direct callees (name, file, line) so you can walk the chain without Bash or one grep per hop. Returns a map of the code to read next, not a written answer and not source. Read that span; do not split a pipeline into one graph call per identifier. A query that names several symbols returns one wider map. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass root to query a different repository and path to narrow inside one. Each call uses exactly one root.",
+      'Identifiers or short "how does X work". Returns an entry span and direct callees, not an answer or source. Read the entry first; follow callees only as needed. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.',
     inputSchema: {
       type: "object",
       properties: {
         query: {
           type: "string",
           description:
-            'Identifiers, or "how does X work" where X is identifiers, for example "Widget render_widget", "how does render_widget work", or "how does handle work" after you learn the entry handler name. Use this for call-chain questions once you have one symbol to anchor on. A query that names several identifiers returns one wider map — do not split it into one call per identifier. Identifier-shaped queries match the graph; a multi-paragraph question does not.',
+            'Identifiers, or "how does X work" where X is identifiers. Identifier-shaped queries match the graph; a multi-paragraph question does not.',
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
-        cwd: CWD_PROPERTY,
       },
       required: ["query"],
     },
@@ -181,7 +172,7 @@ const TOOLS = [
         entries: {
           type: "array",
           description:
-            "Recommended reading entries for this query. Exact identifier hits are first and pinned. If there is no exact hit, these are still engine-selected spans to open.",
+            "Exact identifier hits, pinned first. Empty when there is no exact hit.",
           items: {
             type: "object",
             properties: {

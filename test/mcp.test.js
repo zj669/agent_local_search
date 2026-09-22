@@ -242,9 +242,10 @@ test("initialize advertises only find, grep, and graph", async () => {
     assert.equal(init.result.serverInfo.name, "codeq");
     assert.equal(init.result.serverInfo.version, version);
     assert.match(init.result.instructions, /never ask the user to init/i);
-    assert.match(init.result.instructions, /graph: how code works/i);
-    assert.match(init.result.instructions, /There is no callers tool/i);
-    assert.match(init.result.instructions, /literal string, not rg/i);
+    assert.match(init.result.instructions, /first line names the resolved absolute root/);
+    assert.equal(/graph: how code works/i.test(init.result.instructions), false);
+    assert.equal(init.result.instructions.includes("There is no callers tool"), false);
+    assert.equal(/literal string, not rg/i.test(init.result.instructions), false);
     assert.equal(/detail:\s*"full"/i.test(init.result.instructions), false);
 
     send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
@@ -502,7 +503,7 @@ test("omitting root searches the spawn cwd and the reply names it", async () => 
       assert.equal(seen[0].root, undefined);
       assert.equal(
         defaultedText.split("\n")[0],
-        "[ready] root /repos/worktree via cwd (spawn cwd)",
+        "[ready] root /repos/worktree via cwd:spawn cwd",
       );
       const defaultedPayload = defaulted.result.structuredContent;
       assert.equal(defaultedPayload.root, "/repos/worktree");
@@ -758,6 +759,7 @@ test("tool schemas do not mention a workspace path env", async () => {
     for (const tool of listed.result.tools) {
       assert.equal(Boolean(tool.inputSchema.properties.path), true);
       assert.equal(Boolean(tool.inputSchema.properties.root), true);
+      assert.equal(Boolean(tool.inputSchema.properties.cwd), false);
       assert.equal(Boolean(tool.inputSchema.properties.detail), false);
     }
   });
@@ -774,7 +776,7 @@ test("instructions tell agents to check the root a reply resolved to", async () 
     const init = await waitFor((message) => message.id === 1);
     assert.match(
       init.result.instructions,
-      /Every reply names the resolved absolute root/,
+      /first line names the resolved absolute root/,
     );
     assert.match(init.result.instructions, /retry the same call with root/i);
   });
@@ -789,10 +791,11 @@ test("tool descriptions say when to pass root and how to shape a query", async (
       params: { protocolVersion: "2025-03-26", capabilities: {} },
     });
     const init = await waitFor((message) => message.id === 1);
-    assert.match(
-      init.result.instructions,
-      /map of the code to read next, not a written answer/,
+    assert.equal(
+      init.result.instructions.includes("map of the code to read next"),
+      false,
     );
+    assert.match(init.result.instructions, /retry the same call with root/i);
 
     send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
     const listed = await waitFor((message) => message.id === 2);
@@ -802,12 +805,21 @@ test("tool descriptions say when to pass root and how to shape a query", async (
     for (const tool of Object.values(tools)) {
       assert.match(
         tool.inputSchema.properties.root.description,
-        /not the session cwd/,
+        /overrides cwd\/Git detection/,
       );
+      assert.match(
+        tool.inputSchema.properties.path.description,
+        /never selects an index/,
+      );
+      assert.equal(Boolean(tool.inputSchema.properties.cwd), false);
       assert.equal(Boolean(tool.inputSchema.properties.detail), false);
       assert.equal(Boolean(tool.outputSchema), true);
       assert.equal("complete" in (tool.outputSchema.properties || {}), false);
       assert.equal(Boolean(tool.outputSchema.properties.truncated), true);
+      assert.match(
+        tool.outputSchema.description,
+        /ignoring this object only loses machine navigation/,
+      );
     }
     assert.match(
       tools.grep.inputSchema.properties.fuzzy.description,
@@ -820,9 +832,11 @@ test("tool descriptions say when to pass root and how to shape a query", async (
     assert.match(tools.grep.inputSchema.properties.regex.description, /not rg/);
     assert.match(tools.grep.inputSchema.properties.cursor.description, /opaque/i);
     assert.equal(tools.grep.description.includes("retries as fuzzy"), false);
-    assert.match(tools.grep.description, /zero hits means zero hits/);
     assert.match(tools.grep.description, /this is not rg/i);
-    assert.match(tools.graph.description, /not source/);
+    assert.match(tools.find.description, /not a glob/i);
+    assert.match(tools.graph.description, /not an answer or source/);
+    assert.match(tools.graph.description, /Read the entry first/);
+    assert.match(tools.graph.description, /There is no callers tool/);
     assert.match(
       tools.grep.inputSchema.properties.pattern.description,
       /literal string/,
@@ -831,7 +845,6 @@ test("tool descriptions say when to pass root and how to shape a query", async (
       tools.graph.inputSchema.properties.query.description,
       /a multi-paragraph question does not/,
     );
-    assert.match(tools.graph.description, /not a written answer/);
     assert.equal(Boolean(tools.graph.outputSchema.properties.entries), true);
     assert.equal(Boolean(tools.graph.outputSchema.properties.exactHits), false);
     assert.equal(Boolean(tools.grep.outputSchema.properties.nextCursor), true);
@@ -850,11 +863,12 @@ test("MCP replies start with freshness and keep a graph budget", async () => {
     ].join("\n");
   await withServer(
     {
-      query: async () => ({
+      query: async (request) => ({
         status: "degraded",
         warning: "stale",
         lastSuccessfulSync: "2026-09-21T10:00:00.000Z",
         root: "/repo",
+        query: request.query,
         result: [
           "Found 40 symbols across 2 files.",
           "",
@@ -892,10 +906,8 @@ test("MCP replies start with freshness and keep a graph budget", async () => {
       assert.equal("sourceIncluded" in payload, false);
       assert.equal("files" in payload, false);
       assert.equal("complete" in payload, false);
-      assert.deepEqual(
-        payload.entries.map((entry) => entry.path),
-        ["src/app.ts", "src/auth.ts"],
-      );
+      assert.deepEqual(payload.entries, []);
+      assert.match(text, /NO exact hit on auth/);
       assert.equal(text.includes("```"), false);
     },
   );
@@ -944,7 +956,7 @@ test("machine fields ride structuredContent, not a JSON copy in the text", async
       ]);
       assert.equal(text.includes('"hits"'), false);
       assert.equal(text.includes('"command": "grep"'), false);
-      assert.match(text, /^src\/app\.ts:3:5 const app = 1;$/m);
+      assert.match(text, /^src\/app\.ts:3 const app = 1;$/m);
     },
   );
 });
@@ -985,8 +997,9 @@ test("grep only goes fuzzy when the call asks for it", async () => {
       assert.equal(seen[0].regex, undefined);
       assert.equal(plain.result.content[0].text.split("\n")[0].includes("[fuzzy]"), false);
       assert.match(plain.result.content[0].text, /0 matches/);
-      assert.match(plain.result.content[0].text, /pass regex: true/);
-      assert.match(plain.result.content[0].text, /fuzzy: true/);
+      assert.match(plain.result.content[0].text, /check root above/);
+      assert.match(plain.result.content[0].text, /fuzzy:true/);
+      assert.equal(plain.result.content[0].text.includes("regex"), false);
 
       send({
         jsonrpc: "2.0",
@@ -1068,7 +1081,7 @@ test("README default MCP snippet is the wrapper, no npx, no cwd field", () => {
   assert.equal(firstSnippet.includes("CODEQ_CWD"), false);
   assert.match(readme, /npx steals stdin/);
   assert.match(readme, /codeq-mcp/);
-  assert.match(readme, /@zj669\/codeq@0\.3\.0/);
+  assert.match(readme, /@zj669\/codeq@0\.3\.1/);
   assert.match(readme, /docs\/mcp-install\.md/);
   assert.equal(readme.includes("leagent"), false);
   assert.equal(readme.includes("npx -y"), false);
@@ -1079,7 +1092,7 @@ test("repo MCP install guide covers harness clients without a second wrapper", (
     join(dirname(fileURLToPath(import.meta.url)), "..", "docs", "mcp-install.md"),
     "utf8",
   );
-  assert.match(guide, /@zj669\/codeq@0\.3\.0/);
+  assert.match(guide, /@zj669\/codeq@0\.3\.1/);
   assert.match(
     guide,
     /claude mcp add --scope user --transport stdio codeq -- codeq mcp/,

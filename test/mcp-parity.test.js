@@ -271,7 +271,7 @@ test(
     assert.equal("rootNote" in fileRoot.payload, false);
     assert.match(
       fileRoot.text.split("\n")[0],
-      new RegExp(`root ${repo} via root argument \\(root named a file`),
+      new RegExp(`root ${repo} via root argument; scope src/leagent/policy_selector.py \\(file-as-root; use path\\)`),
     );
     assert.deepEqual(
       [...new Set(fileRoot.payload.hits.map((item) => item.path))],
@@ -293,7 +293,7 @@ test(
         cwd: repo,
         env,
       }),
-      new RegExp(`^\\[\\w+\\] root ${repo} via root argument \\(root named a file`),
+      new RegExp(`^\\[\\w+\\] root ${repo} via root argument; scope src/leagent/policy_selector.py \\(file-as-root; use path\\)`),
     );
 
     const subdirectoryRoot = await session.call("find", {
@@ -305,15 +305,15 @@ test(
     assert.equal("rootNote" in subdirectoryRoot.payload, false);
     assert.match(
       subdirectoryRoot.text.split("\n")[0],
-      /root named a subdirectory, so it resolved to this repository narrowed to packages\/widget\//,
+      /scope packages\/widget\/ \(subdir-as-root; use path\)/,
+    );
+    assert.equal(
+      subdirectoryRoot.text.split("\n")[0].includes("root named a subdirectory"),
+      false,
     );
     assert.match(
       subdirectoryRoot.text.split("\n")[0],
-      /pass a subdirectory as path, not root/,
-    );
-    assert.match(
-      subdirectoryRoot.text.split("\n")[0],
-      new RegExp(`root ${repo} via root argument \\(root named a subdirectory`),
+      new RegExp(`root ${repo} via root argument; scope packages/widget/`),
     );
     assert.deepEqual(subdirectoryRoot.payload.paths, ["packages/widget/index.ts"]);
 
@@ -458,7 +458,7 @@ test(
     assert.equal(mcpFindWt.payload.root, repoWt);
     assert.equal(cliFindWt.root, repoWt);
     assert.equal(
-      mcpFindWt.text.split("\n")[0].includes(`root ${repoWt} via cwd (spawn cwd)`),
+      mcpFindWt.text.split("\n")[0].includes(`root ${repoWt} via cwd:spawn cwd`),
       true,
       mcpFindWt.text.split("\n")[0],
     );
@@ -468,7 +468,7 @@ test(
     assert.equal(cliFindWt.cwdSource, "shell cwd");
     assert.match(
       cliStatusLine(["find", "AlphaWorktreeWidget"], { cwd: repoWt, env }),
-      new RegExp(`^\\[\\w+\\] root ${repoWt} via cwd \\(shell cwd\\)`),
+      new RegExp(`^\\[\\w+\\] root ${repoWt} via cwd:shell cwd`),
     );
     assert.ok(
       mcpFindWt.payload.paths.some((path) =>
@@ -527,7 +527,7 @@ test(
     assert.equal(mcpGraphWt.payload.root, repoWt);
     assert.equal(cliGraphWt.root, repoWt);
     assert.equal(
-      mcpGraphWt.text.split("\n")[0].includes(`root ${repoWt} via cwd (spawn cwd)`),
+      mcpGraphWt.text.split("\n")[0].includes(`root ${repoWt} via cwd:spawn cwd`),
       true,
       mcpGraphWt.text.split("\n")[0],
     );
@@ -537,7 +537,8 @@ test(
     assert.equal(graphText.includes("```"), false);
     assert.equal(/verbatim/i.test(graphText), false);
     assert.equal(graphText.includes("codegraph_explore"), false);
-    assert.match(graphText, /open these files/);
+    assert.match(graphText, /exact AlphaWorktreeWidget|AlphaWorktreeWidget/);
+    assert.equal(graphText.includes("open these files"), false);
     assert.equal("sourceIncluded" in mcpGraphWt.payload, false);
     assert.equal("files" in mcpGraphWt.payload, false);
     assert.ok(
@@ -557,7 +558,8 @@ test(
     assert.equal(cliGraphHuman.ok, true, cliGraphHuman.stderr);
     assert.equal(cliGraphHuman.stdout.includes("```"), false);
     assert.equal(/verbatim/i.test(cliGraphHuman.stdout), false);
-    assert.match(cliGraphHuman.stdout, /open these files/);
+    assert.equal(cliGraphHuman.stdout.includes("open these files"), false);
+    assert.match(cliGraphHuman.stdout, /AlphaWorktreeWidget/);
     assert.equal(
       cliGraphHuman.stdout.trimEnd(),
       mcpGraphWt.text.split("\n").slice(1).join("\n"),
@@ -658,7 +660,7 @@ test(
     assert.equal(mcpDefaultCharlie.payload.hits.length, 0);
     for (const reply of [mcpDefault, mcpDefaultBeta, mcpDefaultCharlie]) {
       assert.equal(
-        reply.text.split("\n")[0].includes(`root ${repoWt} via cwd (spawn cwd)`),
+        reply.text.split("\n")[0].includes(`root ${repoWt} via cwd:spawn cwd`),
         true,
         reply.text.split("\n")[0],
       );
@@ -717,7 +719,7 @@ test(
     assert.equal(viaRoots.isError, false, viaRoots.text);
     assert.equal(viaRoots.payload.root, repoWt);
     assert.equal(
-      viaRoots.text.split("\n")[0].includes(`root ${repoWt} via cwd (roots/list)`),
+      viaRoots.text.split("\n")[0].includes(`root ${repoWt} via cwd:roots/list`),
       true,
       viaRoots.text.split("\n")[0],
     );

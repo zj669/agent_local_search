@@ -6,19 +6,19 @@
 import { Type } from "typebox";
 
 const PATH_DESCRIPTION =
-  "Narrow this one call inside the selected repository: a directory (src/, profiles/app) or a single file (src/pkg/foo.py). This is the only way to scope a search, and it never creates or switches an index: every path in a repository reuses that repository's one index. A relative path is joined to root when root is passed, otherwise to the session cwd — even when the cwd is another checkout or worktree of the same repository. Absolute, ~/, and ../ paths that leave the workspace switch to that repository, but prefer root for that: if root is set, an absolute path under the session cwd or another checkout is still treated as a path inside that root. A path that does not exist is an error that names the absolute path tried, not a silent search of the whole repository. Each call uses exactly one root.";
+  "Narrow this call inside the selected root; never selects an index. Relative paths are relative to that root.";
 
 const ROOT_DESCRIPTION =
-  "Absolute path of the repository, checkout, or worktree to search, for this call only, overriding Git/cwd detection. Pass it whenever the repository you are asking about is not the session cwd: a second clone, another checkout or worktree, or any repository when Pi was started from $HOME. Omitting it silently searches the session cwd, which is the wrong tree when your question is about another repository. root is the only thing that selects an index, and one repository has one index: a subdirectory or a file passed as root resolves to the repository that holds it, narrowed to that subdirectory or file, and says so in the reply. To scope a search, keep root at the checkout and pass path. Every reply names the resolved root and where it came from; if that root is not the repository you meant, retry with root.";
+  "Repository/checkout/worktree for this call; overrides cwd/Git detection. Set it for cross-repo/worktree queries.";
 
 const FIND_DESCRIPTION =
-  "Find files by name or path using the local codeq index (FFF), not Pi's builtin fd/glob find. Indexes the selected root automatically on first use; never ask the user to init or create a project-local index. Pass root to search a different repository and path to narrow inside one. Each call uses exactly one root; results from multiple repositories are never merged. Glob syntax is not supported: **/*profile* matches nothing, pass profile instead. Replies are locators (paths), not source.";
+  "codeq fuzzy file/path lookup, including dotfiles — not Pi's builtin fd. Query is a path fragment, not a glob.";
 
 const GREP_DESCRIPTION =
-  "Search file contents using the local codeq index (FFF), not Pi's builtin rg. Default matching is a literal string — this is not rg. Pass regex true for a regular expression. All-match patterns like .* are rejected when regex is on. Matching is exact by default: zero hits means zero hits, and nothing is silently re-run as fuzzy. Pass fuzzy true to also accept approximate names; those replies are labelled [fuzzy] on the first line and name DIFFERENT identifiers. Indexes the selected root automatically on first use; never ask the user to init. Pass root to search a different repository and path to narrow inside one. Each call uses exactly one root; results from multiple repositories are never merged. Replies are locators (path:line), not source.";
+  "codeq literal string search by default; this is not rg and not Pi's builtin rg. Pass regex:true for a regular expression, fuzzy:true for approximate/different identifiers. Returns matching lines.";
 
 const GRAPH_DESCRIPTION =
-  'Explore related symbols and files with the local codeq index (CodeGraph explore). Use this for call chains and pipelines (tracing which functions run from an entry point): it returns recommended reading entries — the query symbol\'s own span (start–end of that function or class, not the whole file) when that identifier hits, otherwise an engine-selected span — and its direct callees (name, file, line) so you can walk the chain without Bash or one grep per hop. Returns a map of the code to read next, not a written answer and not source. Read that span; do not split a pipeline into one graph call per identifier. A query that names several symbols returns one wider map. Indexes the selected root automatically on first use; never ask the user to init or write a .codegraph directory into the project. Pass root to query a different repository and path to narrow inside one. Each call uses exactly one root.';
+  'codeq graph: identifiers or short "how does X work". Returns an entry span and direct callees, not an answer or source. Read the entry first; follow callees only as needed. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.';
 
 function pathField() {
   return Type.Optional(Type.String({ description: PATH_DESCRIPTION }));
@@ -268,7 +268,7 @@ export function createCodeqExtension({
       parameters: Type.Object({
         query: Type.String({
           description:
-            "File name or path fragment, matched fuzzily against every indexed path, for example foo.py, profiles/app, profile, or SKILL.md. Dotfiles and dot-directories such as .claude/skills and .cursor/rules are indexed, so look for skills and rules here instead of a native glob tool. Glob syntax is not supported: **/*profile* matches nothing, pass profile instead.",
+            "Path fragment, matched fuzzily (foo.py, profiles/app, SKILL.md). Not a glob: **/*profile* matches nothing, pass profile. Dotfiles are indexed.",
         }),
         path: pathField(),
         root: rootField(),
@@ -287,14 +287,14 @@ export function createCodeqExtension({
       description: GREP_DESCRIPTION,
       promptSnippet: "Search file contents (codeq / FFF, not rg)",
       promptGuidelines: [
-        "grep is codeq content search, not rg. Default matching is a literal string. Pass regex: true for a regular expression. All-match patterns like .* are rejected when regex is on.",
-        "grep is exact by default: zero hits means zero hits. Pass fuzzy: true only to try approximate names; those replies are labelled [fuzzy] and name DIFFERENT identifiers.",
-        "grep searches one repository per call. Pass root for another checkout; pass path to narrow inside the selected root. After 1-2 greps, read the named span. Use graph for the next hop in a call chain. Continuation uses an opaque cursor bound to the same search.",
+        "grep is codeq content search, not rg. Default matching is a literal string. Pass regex: true for a regular expression.",
+        "grep is exact by default: zero hits means zero hits. Pass fuzzy: true only for approximate/different identifiers; those replies are labelled [fuzzy].",
+        "grep searches one repository per call. Pass root for another checkout; pass path to narrow. Continuation uses an opaque cursor bound to the same search.",
       ],
       parameters: Type.Object({
         pattern: Type.String({
           description:
-            "One identifier or one literal string, for example focus_item_sources. This is not rg: dots, brackets, and $ are literal unless regex is true. Search one name per call instead of an or-chain of unrelated names.",
+            "literal string by default. This is not rg: dots, brackets, and $ are literal unless regex is true.",
         }),
         path: pathField(),
         root: rootField(),
@@ -313,7 +313,7 @@ export function createCodeqExtension({
         fuzzy: Type.Optional(
           Type.Boolean({
             description:
-              "Default false. When the exact pattern has zero hits, also try approximate matching. Those results are NOT the same identifier — the reply is labelled [fuzzy] and names what it actually matched, so confirm the spelling before concluding anything from them. Leave it off when you know the identifier.",
+              "Default false. Approximate matching for different identifiers, labelled [fuzzy]. NOT the same identifier.",
           }),
         ),
         cursor: Type.Optional(
@@ -338,13 +338,13 @@ export function createCodeqExtension({
       promptSnippet: "Explore the code graph (codeq / CodeGraph)",
       promptGuidelines: [
         'graph is codeq CodeGraph explore, not a written answer. Query identifiers or "how does X work" where X is identifiers — not a multi-paragraph question.',
-        "graph returns recommended reading entries and their direct callees. Read that span; do not split a pipeline into one graph call per identifier. There is no callers tool.",
+        "graph returns an entry span and direct callees. Read the entry first; follow callees only as needed. There is no callers tool.",
         "graph searches one repository per call. Pass root for another checkout; pass path to narrow. Replies are locators, never source.",
       ],
       parameters: Type.Object({
         query: Type.String({
           description:
-            'Identifiers, or "how does X work" where X is identifiers, for example "Widget render_widget", "how does render_widget work", or "how does handle work" after you learn the entry handler name. Use this for call-chain questions once you have one symbol to anchor on. A query that names several identifiers returns one wider map — do not split it into one call per identifier. Identifier-shaped queries match the graph; a multi-paragraph question does not.',
+            'Identifiers, or "how does X work" where X is identifiers. Identifier-shaped queries match the graph; a multi-paragraph question does not.',
         }),
         path: pathField(),
         root: rootField(),

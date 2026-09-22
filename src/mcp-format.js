@@ -1,7 +1,4 @@
-import {
-  neighborhood,
-  symbolLabel,
-} from "./graph-map.js";
+import { neighborhood } from "./graph-map.js";
 import {
   CALLEE_CAP,
   FIND_CAP,
@@ -11,24 +8,33 @@ import {
 
 export const MCP_INSTRUCTIONS = `codeq is local find, grep, and graph for one repository at a time. Indexes are created automatically on first use. Never ask the user to init, never write a .codegraph directory into the project, and never merge results across repositories.
 
-When to use which tool:
-- graph: how code works, a symbol, callers, callees, impact, or "where is X used". Also use graph for call chains and pipelines (for example tracing which functions a request passes through from an entry handler): once you know one entry symbol from a single grep, query graph with identifiers or "how does X work" where X is that symbol — not a multi-paragraph question. graph returns the recommended reading entries (the query symbol's own span when it hits, otherwise an engine-selected span) and its direct callees with file:line for each hop. Prefer it over Bash or repeated grep for the next hop. One call is enough. There is no callers tool. graph returns a map of the code to read next, not a written answer, and never source.
-- find: file names and paths, matched fuzzily, including dotfiles and dot-directories such as .claude/skills and .cursor/rules. Not a glob: **/*profile* matches nothing, pass profile.
-- grep: file contents. Default matching is a literal string, not rg and not a regular expression. Pass regex: true for a regular expression. All-match patterns like .* are rejected when regex is on. Zero hits means zero hits. Pass fuzzy: true to also accept approximate names; those replies are labelled [fuzzy] and name DIFFERENT identifiers.
-
 Indexing starts on tools/call, never on initialize or tools/list. Prefer roots/list when the client gives a real project folder (not $HOME or /); otherwise use process.cwd() if that is a project. If the server was spawned from $HOME, pass path or root on the call. Each call uses exactly one root.
 
-root and path are not interchangeable. An explicit root overrides Git/cwd detection for this call. If you omit root, the session cwd (and Git worktree detection) selects the index — that is the wrong tree when the question is about another repository. path narrows that one call inside the selected repository and takes a directory or a single file; it never builds or switches an index. A relative path is joined to the selected root, not to the session cwd, and a path that does not exist is an error naming the absolute path that was tried — never a silent whole-repository search. A subdirectory or file passed as root resolves to the repository that holds it, narrowed to that subdirectory or file; the reply's first line says so.
+path only narrows this call inside the selected root; it never builds or switches an index. Pass root for another repository, checkout, or worktree.
 
-Every reply names the resolved absolute root and where it came from: "root <abs> via root argument", "via path argument", or "via cwd (roots/list | spawn cwd | cwd argument | shell cwd)", followed by a parenthesised note when root was not a repository checkout. Read that line. When the root is not the repository you asked about — the usual cause is omitting root while working across two repositories — retry the same call with root set to that repository instead of interpreting the result.
+Every reply's first line names the resolved absolute root and via (root argument, path argument, or cwd-derived). Read that line. When the root is not the repository you asked about — the usual cause is omitting root while working across two repositories — retry the same call with root set to that repository instead of interpreting the result.
 
-Replies are locators: the first line, then a short map of where to Read next. graph is the query symbol's own span plus about 8 direct callees. grep is matching lines. find is paths. None of them return source. Read the named span with your own Read. When a reply is truncated it says so, and for grep it gives an opaque cursor bound to that same search.`;
+Replies are locators. Read source with the host Read tool.`;
 
 export function rootOrigin(result = {}) {
   if (result.rootSource === "root") return "root argument";
   if (result.rootSource === "path") return "path argument";
   if (result.rootSource !== "cwd") return null;
-  return result.cwdSource ? `cwd (${result.cwdSource})` : "cwd";
+  return result.cwdSource ? `cwd:${result.cwdSource}` : "cwd";
+}
+
+function scopeNote(result) {
+  const note = result.rootNote;
+  if (!note) return "";
+  const file = note.match(/root named a file[\s\S]*?narrowed to (\S+)/);
+  if (file) {
+    return `; scope ${file[1].replace(/;$/, "")} (file-as-root; use path)`;
+  }
+  const sub = note.match(/root named a subdirectory[\s\S]*?narrowed to (\S+)/);
+  if (sub) {
+    return `; scope ${sub[1].replace(/;$/, "")} (subdir-as-root; use path)`;
+  }
+  return `; ${note}`;
 }
 
 export function freshnessLine(result = {}) {
@@ -36,8 +42,9 @@ export function freshnessLine(result = {}) {
   const parts = [`[${status}]${result.mode === "fuzzy" ? "[fuzzy]" : ""}`];
   if (result.root) {
     const origin = rootOrigin(result);
-    parts.push(`root ${result.root}${origin ? ` via ${origin}` : ""}`);
-    if (result.rootNote) parts.push(`(${result.rootNote})`);
+    parts.push(
+      `root ${result.root}${origin ? ` via ${origin}` : ""}${scopeNote(result)}`,
+    );
   }
   if (status === "degraded" || status === "indexing") {
     if (result.lastSuccessfulSync) {
@@ -89,6 +96,10 @@ function literalFragment(query) {
   return segments[segments.length - 1] || "the name";
 }
 
+function looksLikeRegexWildcards(pattern) {
+  return /\.\*|\.\+/.test(String(pattern || ""));
+}
+
 function identifierAt(text, column) {
   const line = String(text ?? "");
   const index = Math.max(0, Math.min(line.length - 1, (column || 1) - 1));
@@ -129,21 +140,6 @@ function isPreferredHit(hit, pattern) {
 
 function orderGrepHits(hits, pattern, preserveOrder) {
   if (preserveOrder) return hits;
-  const preferred = [];
-  const rest = [];
-  for (const hit of hits) {
-    if (isPreferredHit(hit, pattern)) preferred.push(hit);
-    else rest.push(hit);
-  }
-  if (preferred.length === 0) return hits;
-  return [...preferred, ...rest];
-}
-
-function appendHit(lines, hit) {
-  lines.push(`${hit.path}:${hit.line}:${hit.column} ${clampText(hit.text)}`);
-}
-
-function appendGroupedHits(lines, hits) {
   const groups = [];
   const index = new Map();
   for (const hit of hits) {
@@ -153,10 +149,39 @@ function appendGroupedHits(lines, hits) {
     }
     groups[index.get(hit.path)].hits.push(hit);
   }
-  const many = groups.length > 1;
-  for (const group of groups) {
-    if (many) lines.push(group.path);
-    for (const hit of group.hits) appendHit(lines, hit);
+  const preferredAny = hits.some((hit) => isPreferredHit(hit, pattern));
+  if (!preferredAny) {
+    return groups.flatMap((group) => group.hits);
+  }
+  const fileOrder = [];
+  const seen = new Set();
+  for (const hit of hits) {
+    if (!isPreferredHit(hit, pattern) || seen.has(hit.path)) continue;
+    seen.add(hit.path);
+    fileOrder.push(hit.path);
+  }
+  for (const hit of hits) {
+    if (seen.has(hit.path)) continue;
+    seen.add(hit.path);
+    fileOrder.push(hit.path);
+  }
+  const ordered = [];
+  for (const path of fileOrder) {
+    const group = groups[index.get(path)];
+    const preferred = group.hits
+      .filter((hit) => isPreferredHit(hit, pattern))
+      .sort((a, b) => a.line - b.line);
+    const rest = group.hits
+      .filter((hit) => !isPreferredHit(hit, pattern))
+      .sort((a, b) => a.line - b.line);
+    ordered.push(...preferred, ...rest);
+  }
+  return ordered;
+}
+
+function appendHits(lines, hits) {
+  for (const hit of hits) {
+    lines.push(`${hit.path}:${hit.line} ${clampText(hit.text)}`);
   }
 }
 
@@ -193,7 +218,7 @@ function formatFind(result) {
 
   lines.push(
     truncated
-      ? `find ${query} — ${shown} shown, ${matched} matched`
+      ? `find ${query} — ${shown}/${matched} matches`
       : `find ${query} — ${shown} match${shown === 1 ? "" : "es"}`,
   );
   if (shown > 0) {
@@ -201,14 +226,12 @@ function formatFind(result) {
     for (const item of results) lines.push(item.path);
   }
   if (truncated) {
-    lines.push("", "more: refine the path fragment. this page is capped at 16.");
+    lines.push("", "more: refine query/path");
   }
-  if (hasGlobSyntax(query)) {
+  if (hasGlobSyntax(query) && shown === 0) {
     lines.push(
       "",
-      `find is a fuzzy path fragment, not a glob: drop the **/ and pass ${literalFragment(
-        query,
-      )}.`,
+      `find uses path fragments, not globs; try "${literalFragment(query)}".`,
     );
   }
 
@@ -241,9 +264,7 @@ function formatGrep(result) {
   } else if (hits.length === 0) {
     lines.push(`grep ${pattern} — 0 matches`);
   } else if (truncated) {
-    lines.push(
-      `grep ${pattern} — ${hits.length} shown, more remain`,
-    );
+    lines.push(`grep ${pattern} — ${hits.length} shown, more remain`);
   } else {
     lines.push(
       `grep ${pattern} — ${hits.length} match${hits.length === 1 ? "" : "es"} in ${countFiles(
@@ -254,7 +275,7 @@ function formatGrep(result) {
 
   if (display.length > 0) {
     lines.push("");
-    appendGroupedHits(lines, display);
+    appendHits(lines, display);
   }
 
   if (fuzzy) {
@@ -268,23 +289,17 @@ function formatGrep(result) {
   } else if (hits.length === 0) {
     lines.push("");
     if (result.fuzzyRequested) {
-      lines.push(
-        "nothing in this repository matches that pattern, exact or fuzzy.",
-        result.regex
-          ? "check the root above if you meant another repository."
-          : "if you meant a regular expression, pass regex: true, or check the root above if you meant another repository.",
-      );
+      lines.push("check root above");
     } else {
       lines.push(
-        "nothing in this repository contains that pattern. next: pass regex: true if you meant a regular expression (this is not rg),",
-        "or fuzzy: true for approximate names (they will be labelled [fuzzy] and are NOT the same identifier), or check the root above if you meant another repository.",
+        "check root above; fuzzy:true only for approximate/different identifiers",
       );
     }
-  } else if (truncated && nextCursor) {
-    lines.push(
-      "",
-      `more: pass cursor on the same grep (same root, pattern, glob, path, regex, fuzzy). cursor=${nextCursor}`,
-    );
+    if (looksLikeRegexWildcards(pattern) && !result.regex) {
+      lines.push("regex:true if this was a regular expression");
+    }
+  } else if (truncated) {
+    lines.push("", "more: next page available");
   }
 
   return {
@@ -302,106 +317,64 @@ function formatGrep(result) {
   };
 }
 
-function spanRange(span) {
-  const end = span.endLine || span.startLine;
-  return end !== span.startLine ? `${span.startLine}-${end}` : `${span.startLine}`;
+function spanRange(start, end) {
+  return end && end !== start ? `${start}-${end}` : `${start}`;
 }
 
-function formatCallee(callee) {
-  const oneLine =
-    callee.text &&
-    callee.endLine === callee.line &&
-    !String(callee.text).includes("\n");
-  return `- ${callee.name} (${callee.path}:${callee.line})${
-    oneLine ? ` ${clampText(callee.text)}` : ""
-  }`;
+function formatLocator(path, start, end, name) {
+  return `${path}:${spanRange(start, end)} ${name}`;
 }
 
 function formatGraph(result) {
   const map = neighborhood(result);
-  const { dump, identifiers, hits, entries, callees, hiddenCallees } = map;
+  const { identifiers, hits, entries, callees, hiddenCallees } = map;
   const query = result.query ?? "";
   const truncated = hiddenCallees.length > 0;
-  const scale =
-    dump.symbolCount != null && dump.fileCount != null
-      ? `${dump.symbolCount} symbol${
-          dump.symbolCount === 1 ? "" : "s"
-        } in ${dump.fileCount} file${dump.fileCount === 1 ? "" : "s"}`
-      : `${dump.files.length} file${dump.files.length === 1 ? "" : "s"}`;
   const lines = [];
 
   if (hits.length > 0) {
     lines.push(
-      `graph "${query}" — ${scale}, exact hit${
-        hits.length === 1 ? "" : "s"
-      } on ${hits.map((hit) => hit.symbol).join(", ")}`,
+      `graph "${query}" — exact ${hits.map((hit) => hit.symbol).join(", ")}`,
+    );
+    if (entries.length > 0) {
+      lines.push("");
+      for (const entry of entries) {
+        lines.push(
+          formatLocator(
+            entry.path,
+            entry.startLine,
+            entry.endLine || entry.startLine,
+            entry.symbol,
+          ),
+        );
+      }
+    }
+    if (callees.length > 0) {
+      lines.push("", "callees");
+      for (const callee of callees) {
+        lines.push(
+          formatLocator(
+            callee.path,
+            callee.line,
+            callee.endLine || callee.line,
+            callee.name,
+          ),
+        );
+      }
+      if (hiddenCallees.length > 0) {
+        lines.push(`+${hiddenCallees.length} callees omitted`);
+      }
+    }
+  } else if (identifiers.length > 0) {
+    lines.push(
+      `graph "${query}" — NO exact hit on ${identifiers.join(", ")}`,
+    );
+    lines.push(
+      `next: grep ${identifiers.join(", ")}; narrow path if needed`,
     );
   } else {
-    lines.push(
-      `graph "${query}" — ${scale}, NO exact hit on ${
-        identifiers.join(", ") || query
-      }`,
-    );
-    const ranked = dump.blast
-      .slice(0, 3)
-      .map((entry) => entry.name)
-      .concat(
-        dump.blast.length === 0
-          ? dump.files.flatMap((file) => file.symbols.slice(0, 1).map((s) => s.name))
-          : [],
-      )
-      .slice(0, 3);
-    if (ranked.length > 0) {
-      lines.push(
-        `engine ranked these instead: ${ranked.join(
-          ", ",
-        )}. Narrow with path=, or grep the exact name.`,
-      );
-    }
-  }
-
-  if (entries.length > 0) {
-    lines.push("");
-    for (const entry of entries) {
-      lines.push(`hit: ${entry.symbol} — ${entry.path}:${spanRange(entry)}`);
-    }
-    lines.push("");
-    lines.push(`open these files (${entries.length})`);
-    entries.forEach((entry, index) => {
-      lines.push(
-        `${index + 1}. ${entry.path}:${spanRange(entry)} — ${symbolLabel({
-          name: entry.symbol,
-          kind: entry.kind,
-        })}`,
-      );
-    });
-  } else {
-    lines.push("");
-    lines.push(
-      "open these files (0) — the engine rendered no file section for this query.",
-      "narrow with path=, or query the exact identifier.",
-    );
-  }
-
-  if (callees.length > 0) {
-    lines.push("", "calls (direct)");
-    for (const callee of callees) lines.push(formatCallee(callee));
-    if (hiddenCallees.length > 0) {
-      lines.push(
-        `truncated: ${hiddenCallees.length} more direct callee${
-          hiddenCallees.length === 1 ? "" : "s"
-        } not listed. this is a bounded neighborhood, not an exhaustive callgraph.`,
-      );
-    }
-  }
-
-  if (identifiers.length >= 3) {
-    lines.push(
-      "",
-      `this query names ${identifiers.length} topics (${identifiers.join(
-        ", ",
-      )}), so this map is wider than one symbol.`,
-    );
+    lines.push(`graph "${query}" — NO exact hit`);
+    lines.push(`next: query an identifier or "how does X work"`);
   }
 
   return {
