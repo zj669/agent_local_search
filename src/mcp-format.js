@@ -374,8 +374,12 @@ function formatGraph(result) {
       }
     }
     if (callers.length > 0) {
-      lines.push("", "callers");
-      appendLocators(lines, callers, (caller) => caller.name);
+      lines.push(
+        "",
+        `callers: ${callers
+          .map((caller) => `${caller.name} ${caller.path}:${caller.line}`)
+          .join("; ")}`,
+      );
       if (hiddenCallers.length > 0) {
         lines.push(`+${hiddenCallers.length} callers omitted`);
       }

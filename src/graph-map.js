@@ -428,7 +428,7 @@ export function resolveEntries(dump, identifiers, symbols = [], constraint = nul
   return entries.slice(0, ENTRY_CAP);
 }
 
-function collectLocators(entries, field, cap) {
+function collectLocators(entries, field) {
   const seen = new Set();
   const items = [];
   for (const entry of entries) {
@@ -445,15 +445,29 @@ function collectLocators(entries, field, cap) {
       });
     }
   }
+  return items;
+}
+
+function capLocators(items, cap) {
   return { shown: items.slice(0, cap), hidden: items.slice(cap) };
 }
 
+function callerRank(a, b) {
+  const test = Number(isTestPath(a.path)) - Number(isTestPath(b.path));
+  if (test) return test;
+  const byPath = String(a.path).localeCompare(String(b.path));
+  if (byPath) return byPath;
+  const byLine = (a.line || 0) - (b.line || 0);
+  if (byLine) return byLine;
+  return String(a.name).localeCompare(String(b.name));
+}
+
 export function collectCallees(entries, cap = CALLEE_CAP) {
-  return collectLocators(entries, "callees", cap);
+  return capLocators(collectLocators(entries, "callees"), cap);
 }
 
 export function collectCallers(entries, cap = CALLER_CAP) {
-  return collectLocators(entries, "callers", cap);
+  return capLocators(collectLocators(entries, "callers").sort(callerRank), cap);
 }
 
 export function neighborhood(result) {

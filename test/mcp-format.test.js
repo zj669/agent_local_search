@@ -180,9 +180,10 @@ test("graph is a locator map: no source, no engine self-description", () => {
   assert.equal(text.split("src/app.ts:252-270 send").length - 1, 1);
   assert.match(text, /^src\/session\.ts:4 ready$/m);
   assert.equal(text.includes("function ready()"), false);
-  assert.ok(text.indexOf("\ncallees\n") < text.indexOf("\ncallers\n"), text);
-  assert.match(text, /^callers$/m);
-  assert.match(text, /^src\/main\.ts:8-12 boot$/m);
+  assert.ok(text.indexOf("\ncallees\n") < text.indexOf("\ncallers:"), text);
+  assert.match(text, /^callers: boot src\/main\.ts:8$/m);
+  assert.equal(text.includes("src/main.ts:8-12 boot"), false);
+  assert.doesNotMatch(text, /^callers$/m);
 
   const payload = formatted.structuredContent;
   assert.equal(payload.truncated, false);
@@ -478,7 +479,7 @@ test("find pins exact path matches first without Jev", () => {
   ]);
 });
 
-test("find says glob syntax is not how find works only on a miss", () => {
+test("find says glob syntax is not how find works only on a miss without rewrite", () => {
   const miss = formatMcpToolResult("find", {
     status: "ready",
     root: "/repo",
@@ -499,7 +500,7 @@ test("find says glob syntax is not how find works only on a miss", () => {
   assert.equal(hit.text.includes("path fragment"), false);
 });
 
-test("find marks a glob fallback when the daemon retried a fragment", () => {
+test("find marks a glob rewrite when the daemon searched a fragment first", () => {
   const formatted = formatMcpToolResult("find", {
     status: "ready",
     root: "/repo",
@@ -517,6 +518,19 @@ test("find marks a glob fallback when the daemon retried a fragment", () => {
     from: "**/*blueprint*",
     to: "blueprint",
   });
+});
+
+test("find rewrite line still appears when fragment-first returns no hits", () => {
+  const formatted = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "**/*blueprint*",
+    total: 0,
+    globFallback: { from: "**/*blueprint*", to: "blueprint" },
+    results: [],
+  });
+  assert.match(formatted.text, /query looked like a glob; searched "blueprint"/);
+  assert.equal(formatted.text.includes("try \"blueprint\""), false);
 });
 
 test("find truncation does not mention the page cap", () => {
@@ -564,6 +578,24 @@ test("query identifiers drop the prose around them", () => {
   assert.equal(freshnessLine({ status: "ready" }), "[ready]");
   assert.equal(CALLEE_CAP, 4);
   assert.equal(CALLER_CAP, 4);
+});
+
+test("graph empty dump still pins exact-name definitions from the index", () => {
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    query: "how does createSession work",
+    result: "",
+  });
+  assert.match(formatted.text, /exact createSession/);
+  assert.match(formatted.text, /^src\/session\.ts:12-40 createSession$/m);
+  assert.equal(formatted.structuredContent.entries[0].symbol, "createSession");
+  assert.deepEqual(
+    formatted.structuredContent.callers.map((caller) => caller.name),
+    ["boot"],
+  );
+  assert.match(formatted.text, /^callers: boot src\/main\.ts:8$/m);
+  assert.equal(formatted.text.includes("fast path"), false);
+  assert.equal(formatted.text.includes("skipped explore"), false);
 });
 
 test("graph dump miss still pins an exact-name definition from the index", () => {
@@ -614,6 +646,9 @@ test("graph dump miss still pins an exact-name definition from the index", () =>
     formatted.structuredContent.callers.map((caller) => caller.name),
     ["handle"],
   );
+  assert.match(formatted.text, /^callers: handle src\/pkg\/api\.py:10$/m);
+  assert.match(formatted.text, /^callees$/m);
+  assert.doesNotMatch(formatted.text, /^src\/pkg\/api\.py:\d+(-\d+)? handle$/m);
 });
 
 test("graph dump miss with no exact-name definition stays empty and points at grep", () => {
@@ -745,13 +780,74 @@ test("graph caps callers independently of callees", () => {
       },
     ],
   });
-  assert.match(formatted.text, /^src\/pkg\/caller0\.py:1-2 caller0$/m);
-  assert.match(formatted.text, /^src\/pkg\/caller3\.py:4-5 caller3$/m);
+  assert.match(
+    formatted.text,
+    /^callers: caller0 src\/pkg\/caller0\.py:1; caller1 src\/pkg\/caller1\.py:2; caller2 src\/pkg\/caller2\.py:3; caller3 src\/pkg\/caller3\.py:4$/m,
+  );
   assert.equal(formatted.text.includes("caller4"), false);
+  assert.doesNotMatch(formatted.text, /^src\/pkg\/caller0\.py:1-2 caller0$/m);
   assert.match(formatted.text, /\+3 callers omitted/);
   assert.equal(formatted.structuredContent.callers.length, 4);
   assert.equal(formatted.structuredContent.truncated, true);
   assert.ok(
-    formatted.text.indexOf("\ncallees\n") < formatted.text.indexOf("\ncallers\n"),
+    formatted.text.indexOf("\ncallees\n") < formatted.text.indexOf("\ncallers:"),
   );
+});
+
+test("graph deprioritizes test callers without dropping them until cap", () => {
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    symbols: [
+      {
+        name: "createSession",
+        kind: "function",
+        path: "src/session.ts",
+        startLine: 12,
+        endLine: 40,
+        callees: [],
+        callers: [
+          { name: "spec", path: "test/session.test.ts", line: 4, endLine: 8 },
+          { name: "boot", path: "src/main.ts", line: 8, endLine: 12 },
+          { name: "hook", path: "src/hooks.ts", line: 2, endLine: 3 },
+        ],
+      },
+    ],
+  });
+  assert.match(
+    formatted.text,
+    /^callers: hook src\/hooks\.ts:2; boot src\/main\.ts:8; spec test\/session\.test\.ts:4$/m,
+  );
+  assert.deepEqual(
+    formatted.structuredContent.callers.map((caller) => caller.name),
+    ["hook", "boot", "spec"],
+  );
+});
+
+test("graph caller cap keeps production callers before tests", () => {
+  const formatted = formatMcpToolResult("graph", {
+    ...graphResult,
+    symbols: [
+      {
+        name: "createSession",
+        kind: "function",
+        path: "src/session.ts",
+        startLine: 12,
+        endLine: 40,
+        callees: [],
+        callers: [
+          { name: "specA", path: "test/a.test.ts", line: 1, endLine: 2 },
+          { name: "specB", path: "test/b.test.ts", line: 1, endLine: 2 },
+          { name: "specC", path: "test/c.test.ts", line: 1, endLine: 2 },
+          { name: "boot", path: "src/main.ts", line: 8, endLine: 12 },
+          { name: "hook", path: "src/hooks.ts", line: 2, endLine: 3 },
+        ],
+      },
+    ],
+  });
+  assert.deepEqual(
+    formatted.structuredContent.callers.map((caller) => caller.name),
+    ["hook", "boot", "specA", "specB"],
+  );
+  assert.match(formatted.text, /\+1 callers omitted/);
+  assert.equal(formatted.text.includes("specC"), false);
 });
