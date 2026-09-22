@@ -72,6 +72,45 @@ const prodGrepResult = {
   ],
 };
 
+const prodFindResult = {
+  status: "ready",
+  query: "foo.py",
+  results: [
+    { path: "src/pkg/foo.py", matchType: "exact" },
+    { path: "src/pkg/other.py", matchType: "fuzzy" },
+  ],
+};
+
+const mixedConfigFindResult = {
+  status: "ready",
+  query: "ci",
+  results: [
+    { path: "src/pkg/foo.py", matchType: "fuzzy" },
+    { path: ".github/workflows/ci.yml", matchType: "fuzzy" },
+  ],
+};
+
+const mixedConfigGrepResult = {
+  status: "ready",
+  root: "/repo",
+  pattern: "render_widget",
+  mode: "plain",
+  results: [
+    {
+      path: "src/pkg/foo.py",
+      line: 14,
+      column: 1,
+      text: "def render_widget(name, color, width=12):",
+    },
+    {
+      path: ".github/workflows/ci.yml",
+      line: 4,
+      column: 1,
+      text: "render_widget",
+    },
+  ],
+};
+
 function noulFor(state, questions) {
   const answers = {};
   for (const key of Object.keys(questions)) {
@@ -206,15 +245,38 @@ test("no key is still no_key on a production vis16", async () => {
   assert.deepEqual(ranked.jev, { applied: false, skipped: "no_key" });
 });
 
-test("regex, fuzzy, find, and mixed-tier grep still call the optional rerank", async () => {
+function stubAnswers(payload) {
+  const answers = {};
+  for (const key of Object.keys(payload.questions)) {
+    answers[key] = { type: "noul", noul: 0.1 };
+  }
+  return { answers };
+}
+
+test("find with an all-production vis16 skips the optional rerank", async () => {
+  let called = 0;
+  const systemOne = async () => {
+    called += 1;
+    throw new Error("should not call optional rerank");
+  };
+  assert.equal(prodShortlistSkip("find", { query: "foo.py" }, prodFindResult), true);
+  const ranked = await maybeRerank("find", { query: "foo.py" }, prodFindResult, {
+    env: { CODEQ_JEV_KEY: "x" },
+    systemOne,
+  });
+  assert.equal(called, 0);
+  assert.deepEqual(ranked.jev, { applied: false, skipped: "prod_shortlist" });
+  assert.equal(ranked.preserveOrder, true);
+  assert.deepEqual(ranked.results, prodFindResult.results);
+  const formatted = formatMcpToolResult("find", ranked);
+  assert.equal(/jev|noul|prod_shortlist|skipped/i.test(formatted.text), false);
+});
+
+test("regex, fuzzy, mixed-tier grep, and mixed-config find still call the optional rerank", async () => {
   const calls = [];
   const systemOne = async (payload) => {
     calls.push(payload.state.request.tool);
-    const answers = {};
-    for (const key of Object.keys(payload.questions)) {
-      answers[key] = { type: "noul", noul: 0.1 };
-    }
-    return { answers };
+    return stubAnswers(payload);
   };
   const env = { CODEQ_JEV_KEY: "x" };
 
@@ -231,27 +293,23 @@ test("regex, fuzzy, find, and mixed-tier grep still call the optional rerank", a
     { env, systemOne },
   );
   await maybeRerank("grep", { query: "render_widget" }, grepResult, { env, systemOne });
-  await maybeRerank(
-    "find",
-    { query: "foo.py" },
-    {
-      status: "ready",
-      query: "foo.py",
-      results: [
-        { path: "src/pkg/foo.py", matchType: "exact" },
-        { path: "src/pkg/other.py", matchType: "fuzzy" },
-      ],
-    },
-    { env, systemOne },
-  );
+  await maybeRerank("grep", { query: "render_widget" }, mixedConfigGrepResult, {
+    env,
+    systemOne,
+  });
+  await maybeRerank("find", { query: "ci" }, mixedConfigFindResult, { env, systemOne });
 
-  assert.deepEqual(calls, ["grep", "grep", "grep", "find"]);
+  assert.deepEqual(calls, ["grep", "grep", "grep", "grep", "find"]);
   assert.equal(prodShortlistSkip("grep", { regex: true }, { ...prodGrepResult, mode: "regex" }), false);
   assert.equal(
     prodShortlistSkip("grep", { query: "render_widget" }, grepResult),
     false,
   );
-  assert.equal(prodShortlistSkip("find", { query: "foo.py" }, prodGrepResult), false);
+  assert.equal(
+    prodShortlistSkip("grep", { query: "render_widget" }, mixedConfigGrepResult),
+    false,
+  );
+  assert.equal(prodShortlistSkip("find", { query: "ci" }, mixedConfigFindResult), false);
   assert.equal(
     prodShortlistSkip(
       "grep",
@@ -271,6 +329,36 @@ test("regex, fuzzy, find, and mixed-tier grep still call the optional rerank", a
     ),
     false,
   );
+});
+
+test("graph does not skip the optional rerank on a production neighborhood", async () => {
+  let called = 0;
+  const result = {
+    status: "ready",
+    root: "/repo",
+    query: "how does render_widget work",
+    result: "",
+    symbols: [
+      {
+        name: "render_widget",
+        kind: "function",
+        path: "src/pkg/foo.py",
+        startLine: 14,
+        endLine: 22,
+        callees: [{ name: "layout", path: "src/pkg/layout.py", line: 1, endLine: 2 }],
+      },
+    ],
+  };
+  assert.equal(prodShortlistSkip("graph", { query: result.query }, result), false);
+  const ranked = await maybeRerank("graph", { query: result.query }, result, {
+    env: { CODEQ_JEV_KEY: "x" },
+    systemOne: async (payload) => {
+      called += 1;
+      return stubAnswers(payload);
+    },
+  });
+  assert.equal(called, 1);
+  assert.deepEqual(ranked.jev, { applied: true });
 });
 
 test("skipReason maps HTTP and timeouts", () => {

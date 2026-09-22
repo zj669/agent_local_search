@@ -9,6 +9,19 @@ function posixPath(filePath) {
   return String(filePath || "").replace(/\\/g, "/");
 }
 
+const CI_SEGMENT = /(^|\/)\.(github|circleci|gitlab)(\/|$)/;
+const RC_BASENAME = /^\.[^./]*rc(\.|$)/i;
+const BROWSERSLIST_RC = /^\.browserslistrc$/i;
+const ROOT_DOT_SCRIPT = /^\.[^/]+\.(js|cjs|mjs|ts)$/i;
+const ROOT_CONFIG_SCRIPT = /\.config\.(js|cjs|mjs|ts|json)$/i;
+const ROOT_KARMA = /^karma\.conf\./i;
+
+function isRepoRootFile(path) {
+  const relative = posixPath(path).replace(/^\.\/+/, "");
+  const segments = relative.split("/").filter((part) => part && part !== ".");
+  return segments.length === 1;
+}
+
 export function isDocsPath(filePath) {
   const path = posixPath(filePath);
   if (DOCS_SEGMENT.test(path)) return true;
@@ -18,10 +31,25 @@ export function isDocsPath(filePath) {
   return /^readme(?:\..+)?$/i.test(base);
 }
 
+export function isConfigPath(filePath) {
+  const path = posixPath(filePath);
+  if (CI_SEGMENT.test(path)) return true;
+  const base = path.split("/").pop() || "";
+  if (base.toLowerCase() === "py.typed") return true;
+  if (RC_BASENAME.test(base) || BROWSERSLIST_RC.test(base)) return true;
+  if (!isRepoRootFile(path)) return false;
+  return (
+    ROOT_DOT_SCRIPT.test(base) ||
+    ROOT_CONFIG_SCRIPT.test(base) ||
+    ROOT_KARMA.test(base)
+  );
+}
+
 export function pathTier(filePath) {
-  const docs = isDocsPath(filePath) ? 2 : 0;
-  const test = isTestPath(filePath) ? 1 : 0;
-  return Math.max(docs, test);
+  if (isDocsPath(filePath)) return 3;
+  if (isTestPath(filePath)) return 2;
+  if (isConfigPath(filePath)) return 1;
+  return 0;
 }
 
 export function identifierAt(text, column) {

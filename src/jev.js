@@ -271,8 +271,8 @@ function defaultLiteralGrep(request, result) {
 }
 
 export function prodShortlistSkip(command, request, result) {
-  if (command !== "grep") return false;
-  if (!defaultLiteralGrep(request, result)) return false;
+  if (command !== "grep" && command !== "find") return false;
+  if (command === "grep" && !defaultLiteralGrep(request, result)) return false;
   const results = result?.results || [];
   if (results.length === 0 || results.length > JEV_CANDIDATE_CAP) return false;
   return results.every((item) => pathTier(item.path) === 0);
