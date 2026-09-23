@@ -128,15 +128,15 @@ test("package is a Pi extension named @zj669/codeq-pi", () => {
   const cli = JSON.parse(readSrc("../package.json"));
   const readme = readSrc("README.md");
   assert.equal(pkg.name, "@zj669/codeq-pi");
-  assert.equal(pkg.version, "0.3.11");
-  assert.equal(cli.version, "0.3.11");
+  assert.equal(pkg.version, "0.3.12");
+  assert.equal(cli.version, "0.3.12");
   assert.deepEqual(pkg.pi, { extensions: ["./src/index.ts"] });
   assert.equal(pkg.keywords.includes("pi-package"), true);
   assert.equal(pkg.dependencies["@zj669/codeq"], "file:..");
   assert.equal(pkg.peerDependencies["@earendil-works/pi-coding-agent"], "*");
   assert.equal(pkg.peerDependencies.typebox, "*");
   assert.match(readme, /pi install npm:@zj669\/codeq-pi/);
-  assert.match(readme, /@zj669\/codeq@0\.3\.11/);
+  assert.match(readme, /@zj669\/codeq@0\.3\.12/);
   assert.equal(readme.includes("not published"), false);
   assert.equal(readme.includes("/absolute/path/to/agent_local_search"), false);
 });
