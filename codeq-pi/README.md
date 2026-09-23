@@ -33,6 +33,6 @@ optional `path` / `root` (same meaning as CLI/MCP). One call, one repository.
 Optional `CODEQ_JEV_KEY` on the Pi process reranks the current page the same
 way CLI/MCP do; the reply never names that reranker.
 
-There is no `detail` / `context` on these tools. `grep` is a literal by
+There is no `detail`. Pass `context` (at most 3) for neighboring lines around a hit, `count: true` for match and file totals, and `ignoreCase` to override smart-case. `grep` is a literal by
 default; pass `regex: true` for a regular expression and `cursor` to continue
 the same search.

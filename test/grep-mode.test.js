@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertGrepPattern,
+  grepCaseOptions,
+  ignoreCaseCursorValue,
   isWildcardOnlyPattern,
   wildcardPatternError,
 } from "../src/grep-mode.js";
@@ -26,4 +28,13 @@ test("rejects all-match wildcard patterns only when regex is on", () => {
   assert.equal(isWildcardOnlyPattern("TODO"), false);
   assert.equal(isWildcardOnlyPattern("foo.*Bar"), false);
   assert.match(wildcardPatternError(".*"), /matches everything/);
+});
+
+test("ignoreCase maps onto FFF smartCase without rewriting the pattern", () => {
+  assert.deepEqual(grepCaseOptions(undefined), { smartCase: true });
+  assert.deepEqual(grepCaseOptions(true), { smartCase: true });
+  assert.deepEqual(grepCaseOptions(false), { smartCase: false });
+  assert.equal(ignoreCaseCursorValue(undefined), "default");
+  assert.equal(ignoreCaseCursorValue(true), "true");
+  assert.equal(ignoreCaseCursorValue(false), "false");
 });

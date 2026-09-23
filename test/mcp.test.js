@@ -372,6 +372,119 @@ test("tools map 1:1 onto daemon find/grep/graph requests", async () => {
   );
 });
 
+test("grep forwards context, count, and ignoreCase; count rejects cursor", async () => {
+  const { GREP_COUNT_CURSOR_ERROR } = await import("../src/grep-cursor.js");
+  const seen = [];
+  await withServer(
+    {
+      query: async (request) => {
+        seen.push(request);
+        if (request.count && request.cursor) {
+          throw new Error(GREP_COUNT_CURSOR_ERROR);
+        }
+        if (request.count) {
+          return {
+            root: "/repo",
+            status: "ready",
+            pattern: request.query,
+            count: true,
+            matchCount: 4,
+            fileCount: 2,
+            results: [],
+          };
+        }
+        return {
+          root: "/repo",
+          status: "ready",
+          pattern: request.query,
+          mode: "plain",
+          requestedLimit: request.limit ?? null,
+          pageCap: 48,
+          context: Math.min(request.context ?? 0, 3),
+          contextCapped: (request.context ?? 0) > 3,
+          results: Array.from({ length: request.limit || 1 }, (_, i) => ({
+            path: `src/f${i}.ts`,
+            line: i + 2,
+            column: 1,
+            text: "TODO",
+            contextBefore: ["before"],
+            contextAfter: ["after"],
+          })),
+        };
+      },
+    },
+    async ({ send, waitFor }) => {
+      send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {} },
+      });
+      await waitFor((message) => message.id === 1);
+
+      send({
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: "grep",
+          arguments: { pattern: "TODO", context: 2, ignoreCase: false, limit: 30 },
+        },
+      });
+      const neighbors = await waitFor((message) => message.id === 2);
+      assert.equal(seen[0].context, 2);
+      assert.equal(seen[0].ignoreCase, false);
+      assert.equal(seen[0].limit, 30);
+      assert.equal(neighbors.result.structuredContent.hits.length, 30);
+      assert.match(neighbors.result.content[0].text, /^src\/f0\.ts:1 before$/m);
+      assert.match(neighbors.result.content[0].text, /^src\/f0\.ts:2 TODO$/m);
+      assert.equal(neighbors.result.content[0].text.split("\n")[0].includes("root /repo"), true);
+
+      send({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: {
+          name: "grep",
+          arguments: { pattern: "TODO", context: 10 },
+        },
+      });
+      const capped = await waitFor((message) => message.id === 3);
+      assert.equal(seen[1].context, 10);
+      assert.match(capped.result.content[0].text, /context capped at 3/);
+
+      send({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: {
+          name: "grep",
+          arguments: { pattern: "TODO", count: true },
+        },
+      });
+      const counted = await waitFor((message) => message.id === 4);
+      assert.equal(seen[2].count, true);
+      assert.deepEqual(counted.result.structuredContent.hits, []);
+      assert.equal(counted.result.structuredContent.matchCount, 4);
+      assert.match(counted.result.content[0].text, /4 matches in 2 files/);
+      assert.equal(counted.result.content[0].text.includes("src/f"), false);
+
+      send({
+        jsonrpc: "2.0",
+        id: 5,
+        method: "tools/call",
+        params: {
+          name: "grep",
+          arguments: { pattern: "TODO", count: true, cursor: "opaque" },
+        },
+      });
+      const rejected = await waitFor((message) => message.id === 5);
+      assert.equal(rejected.result.isError, true);
+      assert.equal(rejected.result.content[0].text, GREP_COUNT_CURSOR_ERROR);
+    },
+  );
+});
+
 test("unknown tools and daemon failures are tool errors, not extra commands", async () => {
   await withServer(
     {
@@ -847,7 +960,9 @@ test("tool schemas do not mention a workspace path env", async () => {
     const grep = listed.result.tools.find((tool) => tool.name === "grep");
     assert.equal(Boolean(grep.inputSchema.properties.limit), true);
     assert.equal(Boolean(grep.inputSchema.properties.detail), false);
-    assert.equal(Boolean(grep.inputSchema.properties.context), false);
+    assert.equal(Boolean(grep.inputSchema.properties.context), true);
+    assert.equal(Boolean(grep.inputSchema.properties.count), true);
+    assert.equal(Boolean(grep.inputSchema.properties.ignoreCase), true);
     assert.equal(Boolean(grep.inputSchema.properties.regex), true);
     assert.equal(Boolean(grep.inputSchema.properties.cursor), true);
     for (const tool of listed.result.tools) {
@@ -925,12 +1040,31 @@ test("tool descriptions say when to pass root and how to shape a query", async (
     );
     assert.match(tools.grep.inputSchema.properties.regex.description, /not rg/);
     assert.match(tools.grep.inputSchema.properties.cursor.description, /opaque/i);
+    assert.match(tools.grep.inputSchema.properties.cursor.description, /context/);
+    assert.match(tools.grep.inputSchema.properties.cursor.description, /ignoreCase/);
     assert.equal(tools.grep.description.includes("retries as fuzzy"), false);
     assert.match(tools.grep.description, /this is not rg/i);
     assert.match(
       tools.grep.description,
       /do not open host Ripgrep on the same token/i,
     );
+    assert.match(tools.grep.description, /pass context \(at most 3\)/i);
+    assert.match(tools.grep.description, /not host Read/i);
+    assert.match(
+      tools.grep.inputSchema.properties.limit.description,
+      /1-48/,
+    );
+    assert.match(
+      tools.find.inputSchema.properties.limit.description,
+      /1-48/,
+    );
+    assert.equal(
+      tools.find.inputSchema.properties.limit.description,
+      tools.grep.inputSchema.properties.limit.description,
+    );
+    assert.equal(Boolean(tools.find.inputSchema.properties.context), false);
+    assert.equal(Boolean(tools.graph.inputSchema.properties.context), false);
+    assert.equal(Boolean(tools.find.inputSchema.properties.count), false);
     assert.equal(init.result.instructions.includes("Ripgrep"), false);
     assert.equal(tools.find.description.includes("a or b"), false);
     assert.match(tools.find.description, /not a glob/i);

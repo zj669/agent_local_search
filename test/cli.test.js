@@ -26,8 +26,58 @@ test("CLI help includes mcp and the three query commands", () => {
   assert.match(stdout, /--limit N/);
   assert.match(stdout, /--regex/);
   assert.match(stdout, /--cursor TOKEN/);
+  assert.match(stdout, /--count/);
+  assert.match(stdout, /--ignore-case/);
+  assert.match(stdout, /--case-sensitive/);
+  assert.match(stdout, /--context N/);
   assert.match(stdout, /graph/);
   assert.equal(stdout.includes("--full"), false);
+});
+
+test("CLI rejects --count on find and mixed case flags", () => {
+  let countOnFind = false;
+  try {
+    run(["find", "foo", "--count"]);
+  } catch (error) {
+    countOnFind = true;
+    assert.match(error.stderr, /--count is not valid for find/);
+    assert.equal(error.status, 2);
+  }
+  assert.equal(countOnFind, true);
+
+  let mixed = false;
+  try {
+    run(["grep", "foo", "--ignore-case", "--case-sensitive"]);
+  } catch (error) {
+    mixed = true;
+    assert.match(error.stderr, /cannot use --ignore-case and --case-sensitive together/);
+    assert.equal(error.status, 2);
+  }
+  assert.equal(mixed, true);
+});
+
+test("human CLI grep --context uses the same neighbor locators as MCP", async () => {
+  const { formatMcpToolResult } = await import("../src/mcp-format.js");
+  const formatted = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "match",
+    mode: "plain",
+    context: 2,
+    results: [
+      {
+        path: "src/app.ts",
+        line: 10,
+        column: 1,
+        text: "const match = 1;",
+        contextBefore: ["const a = 1;", "const b = 2;"],
+        contextAfter: ["const c = 3;", "const d = 4;"],
+      },
+    ],
+  });
+  assert.match(formatted.map, /^src\/app\.ts:8 const a = 1;$/m);
+  assert.match(formatted.map, /^src\/app\.ts:10 const match = 1;$/m);
+  assert.match(formatted.map, /^src\/app\.ts:12 const d = 4;$/m);
 });
 
 test("CLI rejects --full", () => {

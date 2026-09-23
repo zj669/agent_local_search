@@ -38,7 +38,8 @@ export const NO_WORKSPACE_ERROR =
 const LIMIT_PROPERTY = {
   type: "integer",
   minimum: 1,
-  description: "Maximum number of matches to return",
+  description:
+    "Page size 1-48 (default 16). Values above 48 are capped; use cursor for more.",
 };
 
 const LOCATOR_SCHEMA = {
@@ -96,7 +97,7 @@ const TOOLS = [
     name: "grep",
     title: "Search file contents",
     description:
-      "Literal string search by default; this is not rg. After this pattern has already returned locators, do not open host Ripgrep on the same token. Pass regex:true for a regular expression, fuzzy:true for approximate/different identifiers. Returns matching lines.",
+      "Literal string search by default; this is not rg. After this pattern has already returned locators, do not open host Ripgrep on the same token. Pass regex:true for a regular expression, fuzzy:true for approximate/different identifiers. Need nearby source for a hit, pass context (at most 3); this is not rg and not host Read. Returns matching lines.",
     inputSchema: {
       type: "object",
       properties: {
@@ -124,9 +125,25 @@ const TOOLS = [
         cursor: {
           type: "string",
           description:
-            "Opaque continuation from a previous grep nextCursor. Bound to the same root, pattern, glob, path, regex, and fuzzy. A mismatch is an error, not page 1.",
+            "Opaque continuation from a previous grep nextCursor. Bound to the same root, pattern, glob, path, regex, fuzzy, context, and ignoreCase. A mismatch is an error, not page 1.",
         },
         limit: LIMIT_PROPERTY,
+        context: {
+          type: "integer",
+          minimum: 0,
+          description:
+            "Neighboring source lines around each hit. Default 0, maximum 3. Not rg and not host Read.",
+        },
+        count: {
+          type: "boolean",
+          description:
+            "When true, return match and file counts only, with no locators. Ignores context. Does not accept cursor.",
+        },
+        ignoreCase: {
+          type: "boolean",
+          description:
+            "This is not rg. Omit for smart-case; true forces case-insensitive matching; false is case-sensitive.",
+        },
       },
       required: ["pattern"],
     },
@@ -144,10 +161,14 @@ const TOOLS = [
               line: { type: "integer" },
               column: { type: "integer" },
               text: { type: "string" },
+              before: { type: "array", items: { type: "string" } },
+              after: { type: "array", items: { type: "string" } },
             },
           },
         },
         nextCursor: { type: "string" },
+        matchCount: { type: "integer" },
+        fileCount: { type: "integer" },
       },
       required: ["status", "root", "truncated", "hits"],
     },
@@ -392,6 +413,13 @@ function toolRequest(name, args, cwd) {
     if (args.cursor !== undefined) request.cursor = String(args.cursor);
     if (args.limit !== undefined) {
       request.limit = positiveInteger(args.limit, "limit");
+    }
+    if (args.context !== undefined) {
+      request.context = positiveInteger(args.context, "context", true);
+    }
+    if (args.count !== undefined) request.count = Boolean(args.count);
+    if (args.ignoreCase !== undefined) {
+      request.ignoreCase = Boolean(args.ignoreCase);
     }
     return request;
   }

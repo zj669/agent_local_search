@@ -3,9 +3,12 @@ import { neighborhood } from "./graph-map.js";
 import {
   CALLEE_CAP,
   CALLER_CAP,
+  CONTEXT_CAP,
+  COUNT_SCAN_CAP,
   FIND_CAP,
   GREP_CAP,
   MATCH_TEXT_CHARS,
+  RANK_WINDOW,
 } from "./limits.js";
 import { identifierAt, rankFindResults, rankGrepHits } from "./path-tier.js";
 
@@ -127,12 +130,6 @@ function orderGrepHits(hits, pattern, preserveOrder) {
   return rankGrepHits(hits, pattern);
 }
 
-function appendHits(lines, hits) {
-  for (const hit of hits) {
-    lines.push(`${hit.path}:${hit.line} ${clampText(hit.text)}`);
-  }
-}
-
 function fuzzyNames(hits, pattern) {
   const names = [];
   const seen = new Set();
@@ -151,15 +148,25 @@ function orderFindResults(results, preserveOrder) {
   return rankFindResults(results);
 }
 
+function shortFindFragment(query) {
+  const text = String(query ?? "").trim();
+  return text.length > 0 && !/[\s./]/.test(text);
+}
+
+function pageCapped(result, truncated) {
+  const requested = result.requestedLimit;
+  const pageCap = result.pageCap ?? RANK_WINDOW;
+  return Boolean(truncated && requested != null && requested > pageCap);
+}
+
 function formatFind(result) {
-  const results = orderFindResults(result.results, result.preserveOrder).slice(
-    0,
-    FIND_CAP,
-  );
+  const results = orderFindResults(result.results, result.preserveOrder);
   const query = result.query ?? "";
   const shown = results.length;
   const matched = result.total ?? shown;
   const truncated = shown < matched;
+  const capped = pageCapped(result, truncated);
+  const pageCap = result.pageCap ?? RANK_WINDOW;
   const lines = [];
 
   lines.push(
@@ -172,7 +179,17 @@ function formatFind(result) {
     for (const item of results) lines.push(item.path);
   }
   if (truncated) {
-    lines.push("", "more: refine query/path");
+    lines.push(
+      "",
+      capped
+        ? `capped at ${pageCap}; more: refine query/path`
+        : "more: refine query/path",
+    );
+    if (shortFindFragment(query)) {
+      lines.push(
+        "find is a path fragment, not a glob; a short token matches widely — use a filename with extension, a directory, or host Glob",
+      );
+    }
   }
   if (result.globFallback) {
     lines.push(
@@ -200,8 +217,57 @@ function formatFind(result) {
   };
 }
 
+function appendHitBlock(lines, hit, context) {
+  if (context > 0) {
+    const before = hit.contextBefore || [];
+    const startLine = hit.line - before.length;
+    for (let index = 0; index < before.length; index += 1) {
+      lines.push(`${hit.path}:${startLine + index} ${clampText(before[index])}`);
+    }
+    lines.push(`${hit.path}:${hit.line} ${clampText(hit.text)}`);
+    const after = hit.contextAfter || [];
+    for (let index = 0; index < after.length; index += 1) {
+      lines.push(`${hit.path}:${hit.line + 1 + index} ${clampText(after[index])}`);
+    }
+    return;
+  }
+  lines.push(`${hit.path}:${hit.line} ${clampText(hit.text)}`);
+}
+
+function appendHits(lines, hits, context = 0) {
+  for (let index = 0; index < hits.length; index += 1) {
+    if (index > 0 && context > 0) lines.push("");
+    appendHitBlock(lines, hits[index], context);
+  }
+}
+
+function formatGrepCount(result) {
+  const pattern = result.pattern ?? "";
+  const matchCount = result.matchCount ?? 0;
+  const fileCount = result.fileCount ?? 0;
+  const truncated = Boolean(result.countTruncated);
+  const fileWord = fileCount === 1 ? "file" : "files";
+  const matchWord = matchCount === 1 ? "match" : "matches";
+  const lines = truncated
+    ? [
+        `grep ${pattern} — ≥${COUNT_SCAN_CAP} matches in ${fileCount} ${fileWord}, more remain`,
+      ]
+    : [`grep ${pattern} — ${matchCount} ${matchWord} in ${fileCount} ${fileWord}`];
+  return {
+    lines,
+    truncated,
+    structured: {
+      hits: [],
+      matchCount,
+      fileCount,
+    },
+  };
+}
+
 function formatGrep(result) {
-  const hits = (result.results || []).slice(0, GREP_CAP);
+  if (result.count) return formatGrepCount(result);
+
+  const hits = result.results || [];
   const pattern = result.pattern ?? "";
   const mode = result.mode ?? "plain";
   const fuzzy = mode === "fuzzy";
@@ -209,6 +275,9 @@ function formatGrep(result) {
   const truncated = Boolean(nextCursor);
   const preserveOrder = Boolean(result.preserveOrder);
   const display = orderGrepHits(hits, pattern, preserveOrder);
+  const context = Number.isSafeInteger(result.context) ? result.context : 0;
+  const capped = pageCapped(result, truncated);
+  const pageCap = result.pageCap ?? RANK_WINDOW;
   const lines = [];
 
   if (fuzzy) {
@@ -229,9 +298,13 @@ function formatGrep(result) {
     );
   }
 
+  if (result.contextCapped) {
+    lines.push(`context capped at ${CONTEXT_CAP}`);
+  }
+
   if (display.length > 0) {
     lines.push("");
-    appendHits(lines, display);
+    appendHits(lines, display, context);
   }
 
   if (fuzzy) {
@@ -257,7 +330,10 @@ function formatGrep(result) {
       );
     }
   } else if (truncated) {
-    lines.push("", "more: next page available");
+    lines.push(
+      "",
+      capped ? `capped at ${pageCap}; more: cursor` : "more: next page available",
+    );
   }
 
   if (
@@ -274,12 +350,19 @@ function formatGrep(result) {
     lines,
     truncated,
     structured: {
-      hits: display.map((hit) => ({
-        path: hit.path,
-        line: hit.line,
-        column: hit.column,
-        text: clampText(hit.text),
-      })),
+      hits: display.map((hit) => {
+        const item = {
+          path: hit.path,
+          line: hit.line,
+          column: hit.column,
+          text: clampText(hit.text),
+        };
+        if (context > 0) {
+          item.before = (hit.contextBefore || []).map(clampText);
+          item.after = (hit.contextAfter || []).map(clampText);
+        }
+        return item;
+      }),
       ...(nextCursor ? { nextCursor } : {}),
     },
   };

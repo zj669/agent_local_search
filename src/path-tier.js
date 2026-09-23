@@ -1,5 +1,5 @@
 import { isTestPath } from "./graph-map.js";
-import { FIND_CAP, GREP_CAP, pageLimit } from "./limits.js";
+import { FIND_CAP, GREP_CAP, RANK_WINDOW, pageLimit } from "./limits.js";
 
 const DOCS_SEGMENT = /(^|\/)(docs?|documentation|examples?|samples?|tutorials?)(\/|$)/i;
 const AGENTS_SEGMENT = /(^|\/)\.agents(\/|$)/;
@@ -186,12 +186,15 @@ export function rankGrepHits(hits, pattern) {
 }
 
 export function applyFindWindow(results, limit) {
-  return rankFindResults(results).slice(0, pageLimit(limit, FIND_CAP));
+  return rankFindResults(results).slice(
+    0,
+    pageLimit(limit, RANK_WINDOW, FIND_CAP),
+  );
 }
 
 export function applyGrepWindow(hits, pattern, limit, offset = 0) {
   const ranked = rankGrepHits(hits, pattern);
-  const cap = pageLimit(limit, GREP_CAP);
+  const cap = pageLimit(limit, RANK_WINDOW, GREP_CAP);
   const start = Number.isSafeInteger(offset) && offset > 0 ? offset : 0;
   return {
     ranked,

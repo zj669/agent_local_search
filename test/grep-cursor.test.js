@@ -113,5 +113,45 @@ test("grep next cursor stays in the ranked window before following FFF", () => {
   const nextWindow = openGrepCursor(lastInWindow, search);
   assert.equal(nextWindow.offset, 0);
   assert.equal(nextWindow.window, 9001);
-  assert.equal(GREP_CURSOR_VERSION, 3);
+  assert.equal(GREP_CURSOR_VERSION, 4);
+});
+
+test("grep cursor binds context and ignoreCase; v3 tokens are stale", () => {
+  const bound = { ...search, context: 2, ignoreCase: "false" };
+  const token = encodeGrepCursor(bound, 16, 0);
+  const opened = openGrepCursor(token, bound);
+  assert.equal(opened.offset, 16);
+  assert.throws(
+    () => openGrepCursor(token, { ...bound, context: 0 }),
+    (error) => error.message === GREP_CURSOR_ERROR,
+  );
+  assert.throws(
+    () => openGrepCursor(token, { ...bound, ignoreCase: "true" }),
+    (error) => error.message === GREP_CURSOR_ERROR,
+  );
+  assert.throws(
+    () => openGrepCursor(token, { ...bound, ignoreCase: "default" }),
+    (error) => error.message === GREP_CURSOR_ERROR,
+  );
+  const v3 = Buffer.from(
+    JSON.stringify({
+      v: 3,
+      root: "/repo",
+      pattern: "TODO",
+      glob: "**/*.ts",
+      constraint: "src/",
+      regex: false,
+      fuzzy: false,
+      mode: "plain",
+      window: 0,
+      offset: 16,
+    }),
+    "utf8",
+  ).toString("base64url");
+  assert.throws(
+    () => openGrepCursor(v3, search),
+    (error) => error.message === GREP_CURSOR_ERROR,
+  );
+  assert.match(GREP_CURSOR_ERROR, /context/);
+  assert.match(GREP_CURSOR_ERROR, /ignoreCase/);
 });

@@ -160,7 +160,13 @@ test("factory registers grep, find, and graph only, without querying", async () 
   ].join("\n");
   assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|tier_order|mixed_grep|skipped/i.test(agentText), false);
   assert.equal(Boolean(pi.tools[1].parameters.properties.cursor), true);
-  assert.equal(Boolean(pi.tools[1].parameters.properties.context), false);
+  assert.equal(Boolean(pi.tools[1].parameters.properties.context), true);
+  assert.equal(Boolean(pi.tools[1].parameters.properties.count), true);
+  assert.equal(Boolean(pi.tools[1].parameters.properties.ignoreCase), true);
+  assert.match(pi.tools[1].description, /pass context \(at most 3\)/i);
+  assert.equal(pi.tools[1].description.includes("host Ripgrep"), false);
+  assert.equal(Boolean(pi.tools[0].parameters.properties.context), false);
+  assert.equal(Boolean(pi.tools[2].parameters.properties.context), false);
 });
 
 test("execute reads ctx.cwd on every call and never caches it", async () => {
@@ -208,6 +214,9 @@ test("forwards path, root, limit, glob, regex, cursor, fuzzy, and graph query", 
       regex: true,
       cursor: "opaque",
       limit: 4,
+      context: 2,
+      count: false,
+      ignoreCase: false,
     },
     undefined,
     undefined,
@@ -238,6 +247,9 @@ test("forwards path, root, limit, glob, regex, cursor, fuzzy, and graph query", 
     regex: true,
     cursor: "opaque",
     limit: 4,
+    context: 2,
+    count: false,
+    ignoreCase: false,
   });
   assert.deepEqual(calls[2].request, {
     command: "graph",
@@ -271,7 +283,7 @@ test("prepareArguments maps builtin find pattern and strips @ / cwd / detail", (
       detail: "full",
       path: "@src/pkg/foo.py",
     }),
-    { pattern: "TODO", path: "src/pkg/foo.py" },
+    { pattern: "TODO", path: "src/pkg/foo.py", ignoreCase: true, context: 2 },
   );
 });
 

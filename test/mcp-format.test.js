@@ -1125,3 +1125,242 @@ test("find or-query with zero hits teaches two find calls and does not rewrite t
   assert.match(globOr.text, /find uses path fragments, not globs/);
   assert.match(globOr.text, /find is not boolean/);
 });
+
+test("grep context neighbors appear in text, not only structured hits", () => {
+  const formatted = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    rootSource: "root",
+    pattern: "match",
+    mode: "plain",
+    context: 2,
+    results: [
+      {
+        path: "src/app.ts",
+        line: 10,
+        column: 1,
+        text: "const match = 1;",
+        contextBefore: ["const a = 1;", "const b = 2;"],
+        contextAfter: ["const c = 3;", "const d = 4;"],
+      },
+      {
+        path: "src/other.ts",
+        line: 2,
+        column: 1,
+        text: "match();",
+        contextBefore: ["export function go() {"],
+        contextAfter: ["}"],
+      },
+    ],
+  });
+  const text = formatted.text;
+  assert.equal(text.split("\n")[0], "[ready] root /repo via root argument");
+  assert.match(text, /^src\/app\.ts:8 const a = 1;$/m);
+  assert.match(text, /^src\/app\.ts:9 const b = 2;$/m);
+  assert.match(text, /^src\/app\.ts:10 const match = 1;$/m);
+  assert.match(text, /^src\/app\.ts:11 const c = 3;$/m);
+  assert.match(text, /^src\/app\.ts:12 const d = 4;$/m);
+  assert.match(text, /^src\/other\.ts:1 export function go\(\) \{$/m);
+  assert.match(text, /^src\/other\.ts:2 match\(\);$/m);
+  assert.match(text, /src\/app\.ts:12 const d = 4;\n\nsrc\/other\.ts:1 /);
+  assert.equal(text.includes("```"), false);
+  assert.deepEqual(formatted.structuredContent.hits[0].before, [
+    "const a = 1;",
+    "const b = 2;",
+  ]);
+  assert.deepEqual(formatted.structuredContent.hits[0].after, [
+    "const c = 3;",
+    "const d = 4;",
+  ]);
+});
+
+test("grep context above 3 is clamped in the reply", () => {
+  const formatted = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "match",
+    mode: "plain",
+    context: 3,
+    contextCapped: true,
+    results: [
+      {
+        path: "src/app.ts",
+        line: 10,
+        column: 1,
+        text: "const match = 1;",
+        contextBefore: ["a", "b", "c"],
+        contextAfter: ["d", "e", "f"],
+      },
+    ],
+  });
+  assert.match(formatted.text, /context capped at 3/);
+  assert.match(formatted.text, /^src\/app\.ts:7 a$/m);
+  assert.match(formatted.text, /^src\/app\.ts:13 f$/m);
+  assert.equal(formatted.text.includes("context capped at 10"), false);
+});
+
+test("grep without context keeps single-line locators even if arrays are present", () => {
+  const formatted = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "match",
+    mode: "plain",
+    results: [
+      {
+        path: "src/app.ts",
+        line: 10,
+        column: 1,
+        text: "const match = 1;",
+        contextBefore: ["const a = 1;"],
+        contextAfter: ["const c = 3;"],
+      },
+    ],
+  });
+  assert.match(formatted.text, /^src\/app\.ts:10 const match = 1;$/m);
+  assert.equal(formatted.text.includes("const a = 1;"), false);
+  assert.equal(formatted.text.includes("const c = 3;"), false);
+  assert.equal("before" in formatted.structuredContent.hits[0], false);
+});
+
+test("grep formatter prints the daemon page instead of recapping at 16", () => {
+  const hits = Array.from({ length: 30 }, (_, i) => ({
+    path: `src/f${i}.ts`,
+    line: i + 1,
+    column: 1,
+    text: "token",
+  }));
+  const thirty = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "token",
+    mode: "plain",
+    requestedLimit: 30,
+    pageCap: 48,
+    nextCursor: "abc",
+    results: hits,
+  });
+  assert.equal(thirty.structuredContent.hits.length, 30);
+  assert.match(thirty.text, /grep token — 30 shown, more remain/);
+  assert.equal(thirty.text.includes("capped at"), false);
+
+  const omitted = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "token",
+    mode: "plain",
+    requestedLimit: null,
+    pageCap: 48,
+    nextCursor: "abc",
+    results: hits.slice(0, 16),
+  });
+  assert.equal(omitted.structuredContent.hits.length, 16);
+  assert.match(omitted.text, /grep token — 16 shown, more remain/);
+  assert.equal(omitted.text.includes("capped at"), false);
+
+  const capped = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "token",
+    mode: "plain",
+    requestedLimit: 500,
+    pageCap: 48,
+    nextCursor: "abc",
+    results: Array.from({ length: 48 }, (_, i) => ({
+      path: `src/f${i}.ts`,
+      line: i + 1,
+      column: 1,
+      text: "token",
+    })),
+  });
+  assert.equal(capped.structuredContent.hits.length, 48);
+  assert.match(capped.text, /capped at 48; more: cursor/);
+  assert.equal(capped.text.includes("cursor=abc"), false);
+
+  const ten = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "token",
+    mode: "plain",
+    requestedLimit: 10,
+    pageCap: 48,
+    results: hits.slice(0, 10),
+  });
+  assert.equal(ten.structuredContent.hits.length, 10);
+  assert.match(ten.text, /grep token — 10 matches in 10 files/);
+});
+
+test("grep count is a number sentence with empty hits", () => {
+  const counted = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "token",
+    mode: "plain",
+    count: true,
+    matchCount: 12,
+    fileCount: 4,
+    results: [
+      { path: "src/app.ts", line: 1, column: 1, text: "token" },
+    ],
+  });
+  assert.equal(
+    counted.text.split("\n").slice(1).join("\n"),
+    "grep token — 12 matches in 4 files",
+  );
+  assert.deepEqual(counted.structuredContent.hits, []);
+  assert.equal(counted.structuredContent.matchCount, 12);
+  assert.equal(counted.structuredContent.fileCount, 4);
+  assert.equal(counted.text.includes("src/app.ts"), false);
+
+  const capped = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "token",
+    mode: "plain",
+    count: true,
+    countTruncated: true,
+    matchCount: 4096,
+    fileCount: 90,
+    results: [],
+  });
+  assert.match(
+    capped.text,
+    /grep token — ≥4096 matches in 90 files, more remain/,
+  );
+  assert.deepEqual(capped.structuredContent.hits, []);
+});
+
+test("find short-fragment truncation teaches fragment-first", () => {
+  const results = Array.from({ length: 16 }, (_, i) => ({
+    path: `src/f${i}.ts`,
+  }));
+  const hint =
+    /find is a path fragment, not a glob; a short token matches widely — use a filename with extension, a directory, or host Glob/;
+  const profile = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "profile",
+    total: 40,
+    results,
+  });
+  assert.match(profile.text, hint);
+
+  for (const query of ["foo.py", "profiles/", "SKILL.md"]) {
+    const formatted = formatMcpToolResult("find", {
+      status: "ready",
+      root: "/repo",
+      query,
+      total: 40,
+      results,
+    });
+    assert.equal(formatted.text.includes("short token matches widely"), false, query);
+  }
+
+  const complete = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "profile",
+    total: 2,
+    results: [{ path: "src/a.ts" }, { path: "src/b.ts" }],
+  });
+  assert.equal(complete.text.includes("short token matches widely"), false);
+});

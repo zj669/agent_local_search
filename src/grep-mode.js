@@ -24,6 +24,16 @@ export function invalidRegexError(pattern, cause) {
   );
 }
 
+export function grepCaseOptions(ignoreCase) {
+  return { smartCase: ignoreCase !== false };
+}
+
+export function ignoreCaseCursorValue(ignoreCase) {
+  if (ignoreCase === true) return "true";
+  if (ignoreCase === false) return "false";
+  return "default";
+}
+
 export function assertGrepPattern(pattern, { regex = false } = {}) {
   if (!regex) return "plain";
   if (isWildcardOnlyPattern(pattern)) {

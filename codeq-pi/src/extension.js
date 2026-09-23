@@ -16,7 +16,7 @@ const FIND_DESCRIPTION =
   "codeq fuzzy file/path lookup, including dotfiles — not Pi's builtin fd. Query is a path fragment, not a glob.";
 
 const GREP_DESCRIPTION =
-  "codeq literal string search by default; this is not rg and not Pi's builtin rg. Pass regex:true for a regular expression, fuzzy:true for approximate/different identifiers. Returns matching lines.";
+  "codeq literal string search by default; this is not rg and not Pi's builtin rg. Pass regex:true for a regular expression, fuzzy:true for approximate/different identifiers. Need nearby source for a hit, pass context (at most 3); this is not rg and not host Read. Returns matching lines.";
 
 const GRAPH_DESCRIPTION =
   "codeq graph: identifiers, or a short question about how X works, where X is defined, or who calls / uses X. Returns an entry span, direct callees, and direct callers — a map, not an answer or source. For how-it-works, Read the entry. For who-calls or where-used, use the callers locators; do not grep that name first. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.";
@@ -33,7 +33,8 @@ function limitField() {
   return Type.Optional(
     Type.Integer({
       minimum: 1,
-      description: "Maximum number of matches to return",
+      description:
+        "Page size 1-48 (default 16). Values above 48 are capped; use cursor for more.",
     }),
   );
 }
@@ -63,10 +64,8 @@ function prepareShared(args) {
   if (next.path !== undefined) next.path = stripAt(next.path);
   if (next.root !== undefined) next.root = stripAt(next.root);
   delete next.cwd;
-  delete next.ignoreCase;
   delete next.literal;
   delete next.detail;
-  delete next.context;
   return next;
 }
 
@@ -132,6 +131,13 @@ function toolRequest(name, params, cwd) {
     if (params.cursor !== undefined) request.cursor = String(params.cursor);
     if (params.limit !== undefined) {
       request.limit = positiveInteger(params.limit, "limit");
+    }
+    if (params.context !== undefined) {
+      request.context = positiveInteger(params.context, "context", true);
+    }
+    if (params.count !== undefined) request.count = Boolean(params.count);
+    if (params.ignoreCase !== undefined) {
+      request.ignoreCase = Boolean(params.ignoreCase);
     }
     return request;
   }
@@ -320,10 +326,29 @@ export function createCodeqExtension({
         cursor: Type.Optional(
           Type.String({
             description:
-              "Opaque continuation from a previous grep nextCursor. Bound to the same root, pattern, glob, path, regex, and fuzzy. A mismatch is an error, not page 1.",
+              "Opaque continuation from a previous grep nextCursor. Bound to the same root, pattern, glob, path, regex, fuzzy, context, and ignoreCase. A mismatch is an error, not page 1.",
           }),
         ),
         limit: limitField(),
+        context: Type.Optional(
+          Type.Integer({
+            minimum: 0,
+            description:
+              "Neighboring source lines around each hit. Default 0, maximum 3. Not rg and not host Read.",
+          }),
+        ),
+        count: Type.Optional(
+          Type.Boolean({
+            description:
+              "When true, return match and file counts only, with no locators. Ignores context. Does not accept cursor.",
+          }),
+        ),
+        ignoreCase: Type.Optional(
+          Type.Boolean({
+            description:
+              "This is not rg. Omit for smart-case; true forces case-insensitive matching; false is case-sensitive.",
+          }),
+        ),
       }),
       prepareArguments: prepareGrepArgs,
       execute: executeTool("grep"),
