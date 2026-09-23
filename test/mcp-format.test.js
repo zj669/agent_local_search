@@ -568,7 +568,7 @@ test("find preserveOrder keeps daemon membership and order", () => {
     ".github/workflows/ci.yml",
     "src/pkg/foo.py",
   ]);
-  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(formatted.text), false);
+  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|tier_order|mixed_grep|skipped/i.test(formatted.text), false);
 });
 
 test("find says glob syntax is not how find works only on a miss without rewrite", () => {

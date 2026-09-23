@@ -110,14 +110,18 @@ export function isPreferredHit(hit, pattern) {
   return false;
 }
 
+export function isExactFindMatch(matchType) {
+  return matchType === "exact" || matchType === "exact_filename";
+}
+
 export function rankFindResults(results) {
   const items = (results || []).map((item, index) => ({ item, index }));
   items.sort((a, b) => {
     const aTier = pathTier(a.item.path);
     const bTier = pathTier(b.item.path);
     if (aTier !== bTier) return aTier - bTier;
-    const aPin = aTier === 0 && a.item.matchType === "exact" ? 0 : 1;
-    const bPin = bTier === 0 && b.item.matchType === "exact" ? 0 : 1;
+    const aPin = aTier === 0 && isExactFindMatch(a.item.matchType) ? 0 : 1;
+    const bPin = bTier === 0 && isExactFindMatch(b.item.matchType) ? 0 : 1;
     if (aPin !== bPin) return aPin - bPin;
     return a.index - b.index;
   });
