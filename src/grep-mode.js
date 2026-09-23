@@ -20,7 +20,7 @@ export function wildcardPatternError(pattern) {
 export function invalidRegexError(pattern, cause) {
   return (
     `Pattern '${pattern}' is not a valid regular expression (${cause}). ` +
-    `Fix the regex, or omit regex: true to search the literal string.`
+    `Fix the regex, or pass regex: false to search the literal string.`
   );
 }
 

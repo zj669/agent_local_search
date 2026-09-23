@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createCodeqExtension } from "../src/extension.js";
-import { EMPTY_TOOL_MENU, formatMcpToolResult } from "../../src/mcp-format.js";
+import { EMPTY_TOOL_MENU, GREP_REGEX_REQUIRED, formatMcpToolResult } from "../../src/mcp-format.js";
 import { maybeRerank } from "../../src/jev.js";
 
 const pkgRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -153,6 +153,14 @@ test("factory registers grep, find, and graph only, without querying", async () 
   assert.match(pi.tools[0].promptGuidelines.join("\n"), /not a glob/);
   assert.match(pi.tools[1].promptGuidelines.join("\n"), /literal string/);
   assert.equal(Boolean(pi.tools[1].parameters.properties.regex), true);
+  assert.ok(pi.tools[1].parameters.required.includes("regex"));
+  assert.ok(pi.tools[1].parameters.required.includes("pattern"));
+  assert.equal(pi.tools[1].parameters.required.includes("fuzzy"), false);
+  assert.match(pi.tools[1].parameters.properties.regex.description, /Required/);
+  assert.equal(
+    pi.tools[1].parameters.properties.regex.description.includes("Default false"),
+    false,
+  );
   const agentText = [
     ...pi.tools.map((tool) => tool.description),
     ...pi.tools.flatMap((tool) => tool.promptGuidelines),
@@ -181,7 +189,7 @@ test("execute reads ctx.cwd on every call and never caches it", async () => {
   cwd = "/repos/beta";
   await byName.grep.execute(
     "2",
-    { pattern: "TODO" },
+    { pattern: "TODO", regex: false },
     undefined,
     undefined,
     ctx,
@@ -192,6 +200,7 @@ test("execute reads ctx.cwd on every call and never caches it", async () => {
   assert.equal(calls[1].request.cwd, "/repos/beta");
   assert.equal(calls[1].request.command, "grep");
   assert.equal(calls[1].request.query, "TODO");
+  assert.equal(calls[1].request.regex, false);
 });
 
 test("forwards path, root, limit, glob, regex, cursor, fuzzy, and graph query", async () => {
@@ -411,6 +420,46 @@ test("missing required find/grep/graph strings return the shared menu", async ()
   assert.equal(find.content[0].text.includes("find requires query"), false);
 });
 
+test("grep without regex is a missing required field, not the empty-call menu", async () => {
+  let queried = false;
+  const { byName } = load({
+    query: async () => {
+      queried = true;
+      return { status: "ready", results: [] };
+    },
+  });
+  const ctx = { cwd: "/session" };
+  const omitted = await byName.grep.execute(
+    "1",
+    { pattern: "TODO" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  const stringRegex = await byName.grep.execute(
+    "2",
+    { pattern: "TODO", regex: "false" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  const literal = await byName.grep.execute(
+    "3",
+    { pattern: "TODO", regex: false },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(queried, true);
+  assert.equal(omitted.isError, true);
+  assert.equal(omitted.content[0].text, GREP_REGEX_REQUIRED);
+  assert.equal(omitted.content[0].text.includes("codeq needs"), false);
+  assert.equal(omitted.content[0].text.includes("fuzzy"), false);
+  assert.equal(stringRegex.isError, true);
+  assert.equal(stringRegex.content[0].text, GREP_REGEX_REQUIRED);
+  assert.equal(literal.isError, undefined);
+});
+
 test("rerank runs before format, matching CLI/MCP", async () => {
   const order = [];
   const { byName } = load({
@@ -533,7 +582,7 @@ test("find production shortlist skip and singleton mixed grep skip match CLI", a
   );
   const grepped = await byName.grep.execute(
     "2",
-    { pattern: "render_widget" },
+    { pattern: "render_widget", regex: false },
     undefined,
     undefined,
     ctx,
@@ -545,7 +594,7 @@ test("find production shortlist skip and singleton mixed grep skip match CLI", a
   );
   const crowded = await byName.grep.execute(
     "3",
-    { pattern: "crowded" },
+    { pattern: "crowded", regex: false },
     undefined,
     undefined,
     ctx,

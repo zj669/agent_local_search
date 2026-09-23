@@ -351,6 +351,7 @@ test(
       const exact = await session.call("grep", {
         root: worktree,
         pattern: "PG_DATABASE_URL",
+        regex: false,
       });
       assert.equal(exact.payload.root, worktree);
       assert.equal(exact.payload.hits.length, 0);
@@ -364,6 +365,7 @@ test(
       const approximate = await session.call("grep", {
         root: worktree,
         pattern: "PG_DATABASE_URL",
+        regex: false,
         fuzzy: true,
       });
       assert.match(approximate.lines[0], /^\[\w+\]\[fuzzy\]/);
@@ -378,6 +380,7 @@ test(
       const hits = await session.call("grep", {
         root: repo,
         pattern: "format_chat_details",
+        regex: false,
       });
       assert.equal("detail" in hits.payload, false);
       assert.match(

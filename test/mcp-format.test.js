@@ -3,11 +3,25 @@ import test from "node:test";
 import {
   formatMcpToolResult,
   freshnessLine,
+  GREP_REGEX_REQUIRED,
+  requireGrepRegex,
   rootOrigin,
   CALLEE_CAP,
   CALLER_CAP,
 } from "../src/mcp-format.js";
 import { parseExploreDump, queryIdentifiers } from "../src/graph-map.js";
+
+test("grep regex must be a boolean; omit is not a literal default", () => {
+  assert.equal(requireGrepRegex(true), true);
+  assert.equal(requireGrepRegex(false), false);
+  for (const value of [undefined, null, "true", "false", 1, 0]) {
+    assert.throws(() => requireGrepRegex(value), {
+      message: GREP_REGEX_REQUIRED,
+    });
+  }
+  assert.equal(GREP_REGEX_REQUIRED.includes("fuzzy"), false);
+  assert.equal(GREP_REGEX_REQUIRED.includes("codeq needs"), false);
+});
 
 const stale = {
   status: "degraded",
