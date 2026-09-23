@@ -262,6 +262,7 @@ test(
 
     const fileRoot = await session.call("grep", {
       pattern: "SHARED_POLICY_TOKEN",
+      regex: false,
       root: file,
     });
     assert.equal(fileRoot.isError, false, fileRoot.text);
@@ -492,6 +493,7 @@ test(
 
     const mcpGrepWt = await session.call("grep", {
       pattern: "ALPHA_WORKTREE_ONLY_TOKEN",
+      regex: false,
     });
     const cliGrepWt = cliJson(["grep", "ALPHA_WORKTREE_ONLY_TOKEN"], {
       cwd: repoWt,
@@ -505,6 +507,7 @@ test(
 
     const mcpGrepMain = await session.call("grep", {
       pattern: "ALPHA_MAIN_CHECKOUT_TOKEN",
+      regex: false,
     });
     const cliGrepMain = cliJson(["grep", "ALPHA_MAIN_CHECKOUT_TOKEN"], {
       cwd: repoWt,
@@ -607,6 +610,7 @@ test(
 
     const mcpGrepB = await session.call("grep", {
       pattern: "BETA_REPO_ONLY_TOKEN",
+      regex: false,
       path: repoB,
     });
     assert.equal(mcpGrepB.payload.root, repoB);
@@ -654,6 +658,7 @@ test(
     });
     const mcpDefaultCharlie = await session.call("grep", {
       pattern: "CHARLIE_REPO_ONLY_TOKEN",
+      regex: false,
     });
     assert.equal(mcpDefault.payload.root, repoWt);
     assert.ok(

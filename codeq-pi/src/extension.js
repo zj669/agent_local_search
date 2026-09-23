@@ -4,7 +4,10 @@
  * default entry and must only run inside execute, never while registering.
  */
 import { Type } from "typebox";
-import { EMPTY_TOOL_MENU } from "@zj669/codeq/src/mcp-format.js";
+import {
+  EMPTY_TOOL_MENU,
+  requireGrepRegex,
+} from "@zj669/codeq/src/mcp-format.js";
 
 const PATH_DESCRIPTION =
   "Narrow this call inside the selected root; never selects an index. Relative paths are relative to that root.";
@@ -16,7 +19,7 @@ const FIND_DESCRIPTION =
   "codeq fuzzy file/path lookup, including dotfiles — not Pi's builtin fd. Query is a path fragment, not a glob.";
 
 const GREP_DESCRIPTION =
-  "codeq literal string search by default; this is not rg and not Pi's builtin rg. Pass regex:true for a regular expression, fuzzy:true for approximate/different identifiers. Need nearby source for a hit, pass context (at most 3); this is not rg and not host Read. Returns matching lines.";
+  "codeq content search; this is not rg and not Pi's builtin rg. regex is required: false for a literal string, true for a regular expression. Pass fuzzy:true for approximate/different identifiers. Need nearby source for a hit, pass context (at most 3); this is not rg and not host Read. Returns matching lines.";
 
 const GRAPH_DESCRIPTION =
   "codeq graph: identifiers, or a short question about how X works, where X is defined, or who calls / uses X. Returns an entry span, direct callees, and direct callers — a map, not an answer or source. For how-it-works, Read the entry. For who-calls or where-used, use the callers locators; do not grep that name first. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.";
@@ -127,7 +130,7 @@ function toolRequest(name, params, cwd) {
     if (params.root !== undefined) request.root = String(params.root);
     if (params.glob !== undefined) request.glob = String(params.glob);
     if (params.fuzzy !== undefined) request.fuzzy = Boolean(params.fuzzy);
-    if (params.regex !== undefined) request.regex = Boolean(params.regex);
+    request.regex = requireGrepRegex(params.regex);
     if (params.cursor !== undefined) request.cursor = String(params.cursor);
     if (params.limit !== undefined) {
       request.limit = positiveInteger(params.limit, "limit");
@@ -294,14 +297,14 @@ export function createCodeqExtension({
       description: GREP_DESCRIPTION,
       promptSnippet: "Search file contents (codeq / FFF, not rg)",
       promptGuidelines: [
-        "grep is codeq content search, not rg. Default matching is a literal string. Pass regex: true for a regular expression.",
+        "grep is codeq content search, not rg. regex is required: false for a literal string, true for a regular expression.",
         "grep is exact by default: zero hits means zero hits. Pass fuzzy: true only for approximate/different identifiers; those replies are labelled [fuzzy].",
         "grep searches one repository per call. Pass root for another checkout; pass path to narrow. Continuation uses an opaque cursor bound to the same search.",
       ],
       parameters: Type.Object({
         pattern: Type.String({
           description:
-            "literal string by default. This is not rg: dots, brackets, and $ are literal unless regex is true.",
+            "literal string when regex is false. This is not rg: dots, brackets, and $ are literal unless regex is true.",
         }),
         path: pathField(),
         root: rootField(),
@@ -311,12 +314,10 @@ export function createCodeqExtension({
               "Optional glob used to constrain matches, for example **/*.ts",
           }),
         ),
-        regex: Type.Optional(
-          Type.Boolean({
-            description:
-              "Default false. When true, pattern is a regular expression. Leave it off for a literal search — foo.ts, process.env, and array[0] are literals. This is not rg.",
-          }),
-        ),
+        regex: Type.Boolean({
+          description:
+            "Required. true = regular expression; false = literal. foo.ts, process.env, and array[0] are literals. This is not rg.",
+        }),
         fuzzy: Type.Optional(
           Type.Boolean({
             description:

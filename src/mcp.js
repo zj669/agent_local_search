@@ -5,6 +5,7 @@ import {
   EMPTY_TOOL_MENU,
   formatMcpToolResult,
   MCP_INSTRUCTIONS,
+  requireGrepRegex,
 } from "./mcp-format.js";
 import { isUnusableWorkspace } from "./paths.js";
 import { maybeRerank } from "./jev.js";
@@ -97,14 +98,14 @@ const TOOLS = [
     name: "grep",
     title: "Search file contents",
     description:
-      "Literal string search by default; this is not rg. After this pattern has already returned locators, do not open host Ripgrep on the same token. Pass regex:true for a regular expression, fuzzy:true for approximate/different identifiers. Need nearby source for a hit, pass context (at most 3); this is not rg and not host Read. Returns matching lines.",
+      "Content search; this is not rg. regex is required: false for a literal string, true for a regular expression. After this pattern has already returned locators, do not open host Ripgrep on the same token. Pass fuzzy:true for approximate/different identifiers. Need nearby source for a hit, pass context (at most 3); this is not rg and not host Read. Returns matching lines.",
     inputSchema: {
       type: "object",
       properties: {
         pattern: {
           type: "string",
           description:
-            "literal string by default. This is not rg: dots, brackets, and $ are literal unless regex is true.",
+            "literal string when regex is false. This is not rg: dots, brackets, and $ are literal unless regex is true.",
         },
         path: PATH_PROPERTY,
         root: ROOT_PROPERTY,
@@ -115,7 +116,7 @@ const TOOLS = [
         regex: {
           type: "boolean",
           description:
-            "Default false. When true, pattern is a regular expression. Leave it off for a literal search — foo.ts, process.env, and array[0] are literals. This is not rg.",
+            "Required. true = regular expression; false = literal. foo.ts, process.env, and array[0] are literals. This is not rg.",
         },
         fuzzy: {
           type: "boolean",
@@ -145,7 +146,7 @@ const TOOLS = [
             "This is not rg. Omit for smart-case; true forces case-insensitive matching; false is case-sensitive.",
         },
       },
-      required: ["pattern"],
+      required: ["pattern", "regex"],
     },
     outputSchema: {
       type: "object",
@@ -409,7 +410,7 @@ function toolRequest(name, args, cwd) {
     if (args.root !== undefined) request.root = String(args.root);
     if (args.glob !== undefined) request.glob = String(args.glob);
     if (args.fuzzy !== undefined) request.fuzzy = Boolean(args.fuzzy);
-    if (args.regex !== undefined) request.regex = Boolean(args.regex);
+    request.regex = requireGrepRegex(args.regex);
     if (args.cursor !== undefined) request.cursor = String(args.cursor);
     if (args.limit !== undefined) {
       request.limit = positiveInteger(args.limit, "limit");

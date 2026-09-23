@@ -13,7 +13,7 @@ import {
   negotiateProtocolVersion,
   NO_WORKSPACE_ERROR,
 } from "../src/mcp.js";
-import { EMPTY_TOOL_MENU } from "../src/mcp-format.js";
+import { EMPTY_TOOL_MENU, GREP_REGEX_REQUIRED } from "../src/mcp-format.js";
 
 const { version } = createRequire(import.meta.url)("../package.json");
 
@@ -428,7 +428,13 @@ test("grep forwards context, count, and ignoreCase; count rejects cursor", async
         method: "tools/call",
         params: {
           name: "grep",
-          arguments: { pattern: "TODO", context: 2, ignoreCase: false, limit: 30 },
+          arguments: {
+            pattern: "TODO",
+            regex: false,
+            context: 2,
+            ignoreCase: false,
+            limit: 30,
+          },
         },
       });
       const neighbors = await waitFor((message) => message.id === 2);
@@ -446,7 +452,7 @@ test("grep forwards context, count, and ignoreCase; count rejects cursor", async
         method: "tools/call",
         params: {
           name: "grep",
-          arguments: { pattern: "TODO", context: 10 },
+          arguments: { pattern: "TODO", regex: false, context: 10 },
         },
       });
       const capped = await waitFor((message) => message.id === 3);
@@ -459,7 +465,7 @@ test("grep forwards context, count, and ignoreCase; count rejects cursor", async
         method: "tools/call",
         params: {
           name: "grep",
-          arguments: { pattern: "TODO", count: true },
+          arguments: { pattern: "TODO", regex: false, count: true },
         },
       });
       const counted = await waitFor((message) => message.id === 4);
@@ -475,7 +481,12 @@ test("grep forwards context, count, and ignoreCase; count rejects cursor", async
         method: "tools/call",
         params: {
           name: "grep",
-          arguments: { pattern: "TODO", count: true, cursor: "opaque" },
+          arguments: {
+            pattern: "TODO",
+            regex: false,
+            count: true,
+            cursor: "opaque",
+          },
         },
       });
       const rejected = await waitFor((message) => message.id === 5);
@@ -598,6 +609,28 @@ test("unnamed or empty tools/call returns the shared menu; a real unknown name d
       assert.equal(unknown.result.isError, true);
       assert.equal(unknown.result.content[0].text, "unknown tool: search");
       assert.equal(unknown.result.content[0].text.includes("codeq needs"), false);
+
+      send({
+        jsonrpc: "2.0",
+        id: 8,
+        method: "tools/call",
+        params: { name: "grep", arguments: { pattern: "TODO" } },
+      });
+      const missingRegex = await waitFor((message) => message.id === 8);
+      assert.equal(missingRegex.result.isError, true);
+      assert.equal(missingRegex.result.content[0].text, GREP_REGEX_REQUIRED);
+      assert.equal(missingRegex.result.content[0].text.includes("codeq needs"), false);
+      assert.equal(missingRegex.result.content[0].text.includes("fuzzy"), false);
+
+      send({
+        jsonrpc: "2.0",
+        id: 9,
+        method: "tools/call",
+        params: { name: "grep", arguments: { pattern: "TODO", regex: "true" } },
+      });
+      const stringRegex = await waitFor((message) => message.id === 9);
+      assert.equal(stringRegex.result.isError, true);
+      assert.equal(stringRegex.result.content[0].text, GREP_REGEX_REQUIRED);
 
       assert.equal(seen.length, 0);
     },
@@ -964,6 +997,8 @@ test("tool schemas do not mention a workspace path env", async () => {
     assert.equal(Boolean(grep.inputSchema.properties.count), true);
     assert.equal(Boolean(grep.inputSchema.properties.ignoreCase), true);
     assert.equal(Boolean(grep.inputSchema.properties.regex), true);
+    assert.deepEqual(grep.inputSchema.required, ["pattern", "regex"]);
+    assert.equal(grep.inputSchema.required.includes("fuzzy"), false);
     assert.equal(Boolean(grep.inputSchema.properties.cursor), true);
     for (const tool of listed.result.tools) {
       assert.equal(Boolean(tool.inputSchema.properties.path), true);
@@ -1039,6 +1074,16 @@ test("tool descriptions say when to pass root and how to shape a query", async (
       /NOT the same identifier/,
     );
     assert.match(tools.grep.inputSchema.properties.regex.description, /not rg/);
+    assert.match(tools.grep.inputSchema.properties.regex.description, /Required/);
+    assert.equal(
+      tools.grep.inputSchema.properties.regex.description.includes("Default false"),
+      false,
+    );
+    assert.equal(
+      tools.grep.inputSchema.properties.regex.description.includes("Leave it off"),
+      false,
+    );
+    assert.match(tools.grep.description, /regex is required/);
     assert.match(tools.grep.inputSchema.properties.cursor.description, /opaque/i);
     assert.match(tools.grep.inputSchema.properties.cursor.description, /context/);
     assert.match(tools.grep.inputSchema.properties.cursor.description, /ignoreCase/);
@@ -1192,7 +1237,7 @@ test("machine fields ride structuredContent, not a JSON copy in the text", async
         jsonrpc: "2.0",
         id: 2,
         method: "tools/call",
-        params: { name: "grep", arguments: { pattern: "app" } },
+        params: { name: "grep", arguments: { pattern: "app", regex: false } },
       });
       const grep = await waitFor((message) => message.id === 2);
       const text = grep.result.content[0].text;
@@ -1238,11 +1283,11 @@ test("grep only goes fuzzy when the call asks for it", async () => {
         jsonrpc: "2.0",
         id: 2,
         method: "tools/call",
-        params: { name: "grep", arguments: { pattern: "PG_DATABASE_URL" } },
+        params: { name: "grep", arguments: { pattern: "PG_DATABASE_URL", regex: false } },
       });
       const plain = await waitFor((message) => message.id === 2);
       assert.equal(seen[0].fuzzy, undefined);
-      assert.equal(seen[0].regex, undefined);
+      assert.equal(seen[0].regex, false);
       assert.equal(plain.result.content[0].text.split("\n")[0].includes("[fuzzy]"), false);
       assert.match(plain.result.content[0].text, /0 matches/);
       assert.match(plain.result.content[0].text, /check root above/);
@@ -1255,7 +1300,7 @@ test("grep only goes fuzzy when the call asks for it", async () => {
         method: "tools/call",
         params: {
           name: "grep",
-          arguments: { pattern: "PG_DATABASE_URL", fuzzy: true },
+          arguments: { pattern: "PG_DATABASE_URL", regex: false, fuzzy: true },
         },
       });
       await waitFor((message) => message.id === 3);
@@ -1287,7 +1332,7 @@ test("grep cursor errors surface as tool errors, not page 1", async () => {
         method: "tools/call",
         params: {
           name: "grep",
-          arguments: { pattern: "TODO", cursor: "not-a-cursor" },
+          arguments: { pattern: "TODO", regex: false, cursor: "not-a-cursor" },
         },
       });
       const reply = await waitFor((message) => message.id === 2);

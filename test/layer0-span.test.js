@@ -536,7 +536,7 @@ test(
     assert.equal(map.text.includes("```"), false);
     assert.equal(Array.isArray(map.payload.callers), true);
 
-    const grep = await call("grep", { root: repo, pattern: "status" });
+    const grep = await call("grep", { root: repo, pattern: "status", regex: false });
     assert.equal(grep.isError, false, grep.text);
     assert.match(grep.text, /^src\/pkg\/widget\.py:\d+ STATUS = "idle"$/m);
     assert.match(grep.text, /^src\/pkg\/widget\.py:\d+ status = color$/m);

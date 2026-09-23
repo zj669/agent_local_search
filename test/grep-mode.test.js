@@ -16,7 +16,7 @@ test("literal is the default; regex must be explicit and valid", () => {
   assert.equal(assertGrepPattern("foo.*Bar"), "plain");
   assert.equal(assertGrepPattern("foo.*Bar", { regex: true }), "regex");
   assert.equal(assertGrepPattern("interface\\{\\}", { regex: true }), "regex");
-  assert.throws(() => assertGrepPattern("(", { regex: true }), /not a valid regular expression/);
+  assert.throws(() => assertGrepPattern("(", { regex: true }), /pass regex: false/);
 });
 
 test("rejects all-match wildcard patterns only when regex is on", () => {

@@ -90,7 +90,7 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
     jsonrpc: "2.0",
     id: 3,
     method: "tools/call",
-    params: { name: "grep", arguments: { pattern: "createSess.*" } },
+    params: { name: "grep", arguments: { pattern: "createSess.*", regex: false } },
   });
   send({
     jsonrpc: "2.0",
@@ -169,13 +169,13 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
     jsonrpc: "2.0",
     id: 7,
     method: "tools/call",
-    params: { name: "grep", arguments: { pattern: "createSessionn" } },
+    params: { name: "grep", arguments: { pattern: "createSessionn", regex: false } },
   });
   send({
     jsonrpc: "2.0",
     id: 8,
     method: "tools/call",
-    params: { name: "grep", arguments: { pattern: "createSessionn", fuzzy: true } },
+    params: { name: "grep", arguments: { pattern: "createSessionn", regex: false, fuzzy: true } },
   });
 
   const graphFull = await waitFor(messages, (message) => message.id === 6, 120_000);
@@ -270,7 +270,7 @@ test("MCP grep context, count, and ignoreCase reach the daemon", async (t) => {
     jsonrpc: "2.0",
     id: 2,
     method: "tools/call",
-    params: { name: "grep", arguments: { pattern: "AgentReview", context: 2 } },
+    params: { name: "grep", arguments: { pattern: "AgentReview", regex: false, context: 2 } },
   });
   const neighbors = await waitFor(messages, (message) => message.id === 2, 30_000);
   assert.equal(neighbors.result.isError, undefined, neighbors.result.content[0].text);
@@ -284,7 +284,7 @@ test("MCP grep context, count, and ignoreCase reach the daemon", async (t) => {
     jsonrpc: "2.0",
     id: 3,
     method: "tools/call",
-    params: { name: "grep", arguments: { pattern: "agentreview" } },
+    params: { name: "grep", arguments: { pattern: "agentreview", regex: false } },
   });
   const smart = await waitFor(messages, (message) => message.id === 3, 30_000);
   assert.ok(smart.result.structuredContent.hits.length > 0, smart.result.content[0].text);
@@ -295,7 +295,7 @@ test("MCP grep context, count, and ignoreCase reach the daemon", async (t) => {
     method: "tools/call",
     params: {
       name: "grep",
-      arguments: { pattern: "agentreview", ignoreCase: false },
+      arguments: { pattern: "agentreview", regex: false, ignoreCase: false },
     },
   });
   const sensitive = await waitFor(messages, (message) => message.id === 4, 30_000);
@@ -305,7 +305,7 @@ test("MCP grep context, count, and ignoreCase reach the daemon", async (t) => {
     jsonrpc: "2.0",
     id: 5,
     method: "tools/call",
-    params: { name: "grep", arguments: { pattern: "AgentReview", count: true } },
+    params: { name: "grep", arguments: { pattern: "AgentReview", regex: false, count: true } },
   });
   const counted = await waitFor(messages, (message) => message.id === 5, 30_000);
   assert.deepEqual(counted.result.structuredContent.hits, []);

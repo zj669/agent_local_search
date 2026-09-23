@@ -24,8 +24,18 @@ Replies are locators. Read source with the host Read tool.`;
 
 export const EMPTY_TOOL_MENU = `codeq needs find.query, grep.pattern, or graph.query — do not call with {}.
 find: path fragment (not a glob, not "a or b").
-grep: literal token; regex:true only for a real regexp (| or groups).
+grep: token; regex true for a regexp, false for a literal.
 graph: one identifier (callers/callees/how-it-works). Then host Read the spans.`;
+
+export const GREP_REGEX_REQUIRED =
+  "grep needs regex: true for a regexp or false for a literal.";
+
+export function requireGrepRegex(value) {
+  if (typeof value !== "boolean") {
+    throw new Error(GREP_REGEX_REQUIRED);
+  }
+  return value;
+}
 
 export function rootOrigin(result = {}) {
   if (result.rootSource === "root") return "root argument";
