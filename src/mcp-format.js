@@ -7,7 +7,7 @@ import {
   GREP_CAP,
   MATCH_TEXT_CHARS,
 } from "./limits.js";
-import { identifierAt, rankGrepHits } from "./path-tier.js";
+import { identifierAt, rankFindResults, rankGrepHits } from "./path-tier.js";
 
 export const MCP_INSTRUCTIONS = `codeq is local find, grep, and graph for one repository at a time. Indexes are created automatically on first use. Never ask the user to init, never write a .codegraph directory into the project, and never merge results across repositories.
 
@@ -115,19 +115,9 @@ function fuzzyNames(hits, pattern) {
   return names;
 }
 
-function pinExactFind(results) {
-  const exact = [];
-  const rest = [];
-  for (const item of results || []) {
-    if (item.matchType === "exact") exact.push(item);
-    else rest.push(item);
-  }
-  return [...exact, ...rest];
-}
-
 function orderFindResults(results, preserveOrder) {
   if (preserveOrder) return results || [];
-  return pinExactFind(results);
+  return rankFindResults(results);
 }
 
 function formatFind(result) {

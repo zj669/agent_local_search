@@ -64,6 +64,10 @@ test("visible caps stay 16 and the rank window is 48", () => {
   assert.equal((src.match(/pageSize: RANK_WINDOW/g) || []).length, 2);
   assert.equal(src.includes("pageLimit(options.limit, FIND_CAP)"), false);
   assert.equal(src.includes("pageLimit(options.limit, GREP_CAP)"), false);
+  assert.match(
+    src,
+    /results: applyFindWindow\(mapped, options\.limit\),\n\s+preserveOrder: true,/,
+  );
 });
 
 test("isDocsPath matches doc segments and README names", () => {
@@ -159,7 +163,7 @@ test("pathTier demotes config/CI below production and above tests", () => {
   assert.equal(isConfigPath("src/distributed/mod.py"), false);
 });
 
-test("find ranking pins exact, then production over docs, without basename pin", () => {
+test("find ranking uses pathTier before exact pin, and pins exact only in production", () => {
   const ranked = rankFindResults([
     { path: "docs/widget.md", matchType: "fuzzy" },
     { path: "README.md", matchType: "fuzzy" },
@@ -203,6 +207,48 @@ test("find ranking pins exact, then production over docs, without basename pin",
   assert.deepEqual(
     basename.map((item) => item.path),
     ["src/pkg/other.py", "docs/foo.py"],
+  );
+
+  const auxExact = rankFindResults([
+    { path: ".gitignore", matchType: "exact" },
+    { path: "src/pkg/a.py", matchType: "fuzzy" },
+  ]);
+  assert.deepEqual(
+    auxExact.map((item) => item.path),
+    ["src/pkg/a.py", ".gitignore"],
+  );
+  assert.deepEqual(
+    rankFindResults([
+      { path: "CHANGELOG.md", matchType: "exact" },
+      { path: "src/pkg/a.py", matchType: "fuzzy" },
+    ]).map((item) => item.path),
+    ["src/pkg/a.py", "CHANGELOG.md"],
+  );
+  assert.deepEqual(
+    rankFindResults([
+      { path: "LICENSE", matchType: "exact" },
+      { path: "src/pkg/a.py", matchType: "fuzzy" },
+    ]).map((item) => item.path),
+    ["src/pkg/a.py", "LICENSE"],
+  );
+
+  const sameProd = rankFindResults([
+    { path: "src/pkg/widget.py", matchType: "fuzzy" },
+    { path: "src/pkg/other.py", matchType: "exact" },
+  ]);
+  assert.deepEqual(
+    sameProd.map((item) => item.path),
+    ["src/pkg/other.py", "src/pkg/widget.py"],
+  );
+
+  const auxSameTier = rankFindResults([
+    { path: ".gitignore", matchType: "exact" },
+    { path: ".editorconfig", matchType: "fuzzy" },
+    { path: "LICENSE", matchType: "exact" },
+  ]);
+  assert.deepEqual(
+    auxSameTier.map((item) => item.path),
+    [".gitignore", ".editorconfig", "LICENSE"],
   );
 });
 

@@ -321,6 +321,7 @@ export class RootContext {
       total: value.totalMatched,
       indexed: value.totalFiles ?? null,
       results: applyFindWindow(mapped, options.limit),
+      preserveOrder: true,
       ...(globFallback ? { globFallback } : {}),
     };
   }
