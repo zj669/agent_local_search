@@ -3,7 +3,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { createCodeqExtension } from "../src/extension.js";
+import {
+  createCodeqExtension,
+  SAFE_TUI_WIDTH,
+  wrapTuiLine,
+} from "../src/extension.js";
 import { EMPTY_TOOL_MENU, GREP_REGEX_REQUIRED, formatMcpToolResult } from "../../src/mcp-format.js";
 import { maybeRerank } from "../../src/jev.js";
 
@@ -762,4 +766,180 @@ test("graph exact neighborhood skip matches CLI and empty entries are not that s
     /jev|noul|prod_shortlist|exact_neighborhood|tier_order|mixed_grep|skipped/i.test(missed.content[0].text),
     false,
   );
+});
+
+const ANSI = /\x1b\[[0-9;]*m/g;
+
+function visible(line) {
+  return String(line).replace(ANSI, "").length;
+}
+
+function assertFits(lines, width) {
+  assert.ok(lines.length > 0);
+  for (const line of lines) {
+    assert.ok(
+      visible(line) <= width,
+      `TUI line ${visible(line)} > ${width}: ${String(line).replace(ANSI, "")}`,
+    );
+  }
+}
+
+const NANTIANMEN_ROOT = "/Users/zj669/project/leagent-nantianmen";
+const LONG_ABS_LOCATOR = `${NANTIANMEN_ROOT}/src/leagent_nantianmen/flows/factory.py`;
+
+function longGraphFormatted() {
+  return formatMcpToolResult("graph", {
+    status: "ready",
+    root: NANTIANMEN_ROOT,
+    rootSource: "root",
+    query: "NantianmenFlowFactory create_flow",
+    result: "",
+    symbols: [
+      {
+        name: "NantianmenFlowFactory",
+        kind: "class",
+        path: LONG_ABS_LOCATOR,
+        startLine: 120,
+        endLine: 180,
+        callees: [
+          { name: "run_step", path: LONG_ABS_LOCATOR, line: 40, endLine: 55 },
+        ],
+        callers: [{ name: "main", path: LONG_ABS_LOCATOR, line: 400, endLine: 420 }],
+      },
+    ],
+  });
+}
+
+test("wrapTuiLine keeps root and via when the freshness line is wider than the TUI", () => {
+  const first = `[ready] root ${NANTIANMEN_ROOT} via root argument`;
+  const wrapped = wrapTuiLine(first, 48);
+  assert.ok(wrapped.every((line) => line.length <= 48));
+  assert.ok(wrapped.some((line) => line.includes("[ready]")));
+  assert.ok(
+    wrapped.some((line) => line === NANTIANMEN_ROOT || line.endsWith(NANTIANMEN_ROOT)),
+    wrapped.join("\n"),
+  );
+  assert.ok(wrapped.some((line) => line.startsWith("via ")));
+  assert.equal(wrapped.join("").includes("via root argument"), true);
+});
+
+test("wrapTuiLine hard-wraps an unbreakable locator and keeps path, span, and name", () => {
+  const locator = `${LONG_ABS_LOCATOR}:120-180 NantianmenFlowFactory`;
+  assert.ok(locator.length > 80);
+  const wrapped = wrapTuiLine(locator, SAFE_TUI_WIDTH);
+  assert.ok(wrapped.every((line) => line.length <= SAFE_TUI_WIDTH));
+  const joined = wrapped.join("");
+  assert.equal(joined.includes(LONG_ABS_LOCATOR), true);
+  assert.equal(joined.includes("120-180"), true);
+  assert.equal(joined.includes("NantianmenFlowFactory"), true);
+  assert.ok(
+    wrapped.some((line) => /factory\.py:120-180 NantianmenFlowFactory/.test(line)),
+    wrapped.join("\n"),
+  );
+});
+
+test("Pi renderCall/renderResult wrap to the given width; model text stays one-line locators", async () => {
+  const { byName } = load({
+    query: async (request) => ({
+      status: "ready",
+      root: NANTIANMEN_ROOT,
+      rootSource: "root",
+      query: request.query,
+      result: "",
+      symbols: [
+        {
+          name: "NantianmenFlowFactory",
+          kind: "class",
+          path: LONG_ABS_LOCATOR,
+          startLine: 120,
+          endLine: 180,
+          callees: [],
+          callers: [],
+        },
+      ],
+    }),
+  });
+  const theme = {
+    bold: (s) => s,
+    fg: (color, text) => `\x1b[32m${text}\x1b[39m`,
+  };
+  const executed = await byName.graph.execute(
+    "1",
+    { query: "NantianmenFlowFactory create_flow", root: NANTIANMEN_ROOT },
+    undefined,
+    undefined,
+    { cwd: NANTIANMEN_ROOT },
+  );
+  const model = executed.content[0].text;
+  assert.match(model, /^\[ready\] root \/Users\/zj669\/project\/leagent-nantianmen via root argument$/m);
+  assert.match(
+    model,
+    new RegExp(`^${LONG_ABS_LOCATOR.replace(/\//g, "\\/")}:120-180 NantianmenFlowFactory$`, "m"),
+  );
+  assert.ok(
+    model
+      .split("\n")
+      .some((line) => line.length > 80 && line.includes("NantianmenFlowFactory")),
+  );
+
+  const call = byName.graph.renderCall(
+    { query: "NantianmenFlowFactory create_flow", root: NANTIANMEN_ROOT },
+    theme,
+  );
+  const result = byName.graph.renderResult(
+    executed,
+    { expanded: false },
+    theme,
+  );
+  for (const width of [80, 78, SAFE_TUI_WIDTH, 40]) {
+    assertFits(call.render(width), width);
+    assertFits(result.render(width), width);
+  }
+  assertFits(call.render(), SAFE_TUI_WIDTH);
+  assertFits(result.render(), SAFE_TUI_WIDTH);
+
+  const inner = 78;
+  const boxed = result.render(inner).map((line) => ` ${line.replace(ANSI, "")}`);
+  assert.ok(boxed.every((line) => line.length <= 80));
+
+  const rendered = result.render(78).map((line) => line.replace(ANSI, "")).join("\n");
+  assert.match(rendered, /\[ready\]/);
+  assert.match(rendered, /root /);
+  assert.match(rendered, /via root argument/);
+  assert.match(rendered, /NantianmenFlowFactory/);
+  assert.match(rendered, /120-180/);
+});
+
+test("81-column locator plus Pi Box pad is what threw 82 > 80; wrapped render stays under 80", () => {
+  const locator = `${"src/leagent_nantianmen/bench/decidexxxxxxxxxxxxxxx.py"}:120-180 decide_final_result`;
+  assert.equal(locator.length, 81);
+  const formatted = formatMcpToolResult("graph", {
+    status: "ready",
+    root: NANTIANMEN_ROOT,
+    rootSource: "root",
+    query: "decide_final_result",
+    result: "",
+    symbols: [
+      {
+        name: "decide_final_result",
+        kind: "function",
+        path: "src/leagent_nantianmen/bench/decidexxxxxxxxxxxxxxx.py",
+        startLine: 120,
+        endLine: 180,
+        callees: [],
+        callers: [],
+      },
+    ],
+  });
+  assert.match(formatted.text, /^src\/leagent_nantianmen\/bench\/decidexxxxxxxxxxxxxxx\.py:120-180 decide_final_result$/m);
+  const { byName } = load();
+  const result = byName.graph.renderResult(
+    { content: [{ type: "text", text: formatted.text }] },
+    { expanded: true },
+    { fg: (_c, s) => s },
+  );
+  const inner = result.render(78);
+  assertFits(inner, 78);
+  assert.ok(inner.every((line) => ` ${line}`.length <= 80));
+  assert.equal(longGraphFormatted().text.includes(LONG_ABS_LOCATOR), true);
 });
