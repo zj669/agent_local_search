@@ -63,8 +63,8 @@ test("package is a Pi extension named @zj669/codeq-pi", () => {
   const pkg = JSON.parse(readSrc("package.json"));
   const cli = JSON.parse(readSrc("../package.json"));
   assert.equal(pkg.name, "@zj669/codeq-pi");
-  assert.equal(pkg.version, "0.3.9");
-  assert.equal(cli.version, "0.3.9");
+  assert.equal(pkg.version, "0.3.10");
+  assert.equal(cli.version, "0.3.10");
   assert.deepEqual(pkg.pi, { extensions: ["./src/index.ts"] });
   assert.equal(pkg.keywords.includes("pi-package"), true);
   assert.equal(pkg.dependencies["@zj669/codeq"], "file:..");
@@ -153,7 +153,7 @@ test("factory registers grep, find, and graph only, without querying", async () 
     ...pi.tools.flatMap((tool) => tool.promptGuidelines),
     ...pi.tools.map((tool) => JSON.stringify(tool.parameters)),
   ].join("\n");
-  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(agentText), false);
+  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|tier_order|mixed_grep|skipped/i.test(agentText), false);
   assert.equal(Boolean(pi.tools[1].parameters.properties.cursor), true);
   assert.equal(Boolean(pi.tools[1].parameters.properties.context), false);
 });
@@ -391,7 +391,7 @@ test("rerank runs before format, matching CLI/MCP", async () => {
   assert.equal(result.content[0].text, "ranked.ts");
 });
 
-test("find production shortlist skip and mixed-config grep still match CLI", async () => {
+test("find production shortlist skip and singleton mixed grep skip match CLI", async () => {
   let called = 0;
   const systemOne = async (payload) => {
     called += 1;
@@ -412,6 +412,34 @@ test("find production shortlist skip and mixed-config grep still match CLI", asy
           results: [
             { path: "src/pkg/foo.py", matchType: "exact" },
             { path: "src/pkg/other.py", matchType: "fuzzy" },
+          ],
+        };
+      }
+      if (request.query === "crowded") {
+        return {
+          status: "ready",
+          root: "/repos/app",
+          pattern: request.query,
+          mode: "plain",
+          results: [
+            {
+              path: "src/pkg/foo.py",
+              line: 1,
+              column: 1,
+              text: "def crowded():",
+            },
+            {
+              path: "src/pkg/bar.py",
+              line: 2,
+              column: 1,
+              text: "crowded()",
+            },
+            {
+              path: "src/pkg/foo_test.py",
+              line: 8,
+              column: 1,
+              text: "def test_crowded():",
+            },
           ],
         };
       }
@@ -448,7 +476,10 @@ test("find production shortlist skip and mixed-config grep still match CLI", asy
     ctx,
   );
   assert.equal(called, 0);
-  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(found.content[0].text), false);
+  assert.equal(
+    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|mixed_grep|skipped/i.test(found.content[0].text),
+    false,
+  );
   const grepped = await byName.grep.execute(
     "2",
     { pattern: "render_widget" },
@@ -456,8 +487,23 @@ test("find production shortlist skip and mixed-config grep still match CLI", asy
     undefined,
     ctx,
   );
+  assert.equal(called, 0);
+  assert.equal(
+    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|mixed_grep|skipped/i.test(grepped.content[0].text),
+    false,
+  );
+  const crowded = await byName.grep.execute(
+    "3",
+    { pattern: "crowded" },
+    undefined,
+    undefined,
+    ctx,
+  );
   assert.equal(called, 1);
-  assert.equal(/jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(grepped.content[0].text), false);
+  assert.equal(
+    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|mixed_grep|skipped/i.test(crowded.content[0].text),
+    false,
+  );
 });
 
 test("mixed-tier find skip matches CLI and all-config find still reranks", async () => {
@@ -507,7 +553,7 @@ test("mixed-tier find skip matches CLI and all-config find still reranks", async
   );
   assert.equal(called, 0);
   assert.equal(
-    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(mixed.content[0].text),
+    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|mixed_grep|skipped/i.test(mixed.content[0].text),
     false,
   );
   const allConfig = await byName.find.execute(
@@ -519,7 +565,7 @@ test("mixed-tier find skip matches CLI and all-config find still reranks", async
   );
   assert.equal(called, 1);
   assert.equal(
-    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(allConfig.content[0].text),
+    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|mixed_grep|skipped/i.test(allConfig.content[0].text),
     false,
   );
 });
@@ -577,7 +623,7 @@ test("graph exact neighborhood skip matches CLI and empty entries are not that s
   );
   assert.equal(called, 0);
   assert.equal(
-    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(mapped.content[0].text),
+    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|mixed_grep|skipped/i.test(mapped.content[0].text),
     false,
   );
   assert.match(
@@ -607,7 +653,7 @@ test("graph exact neighborhood skip matches CLI and empty entries are not that s
   );
   assert.equal(missReranked.jev.skipped, "too_few");
   assert.equal(
-    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|skipped/i.test(missed.content[0].text),
+    /jev|noul|prod_shortlist|exact_neighborhood|tier_order|mixed_grep|skipped/i.test(missed.content[0].text),
     false,
   );
 });

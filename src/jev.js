@@ -1,6 +1,6 @@
 import { neighborhood } from "./graph-map.js";
 import { JEV_CANDIDATE_CAP, JEV_TIMEOUT_MS } from "./limits.js";
-import { pathTier } from "./path-tier.js";
+import { isExactFindMatch, pathTier } from "./path-tier.js";
 
 export { JEV_TIMEOUT_MS, JEV_CANDIDATE_CAP };
 
@@ -85,7 +85,7 @@ export function extractCandidates(command, request, result) {
     return (result.results || []).map((item, index) => ({
       index,
       kind: "find",
-      pinned: pathTier(item.path) === 0 && item.matchType === "exact",
+      pinned: pathTier(item.path) === 0 && isExactFindMatch(item.matchType),
       anchor: item.path,
       record: compact({
         path: item.path,
@@ -324,6 +324,23 @@ export function tierOrderSkip(command, request, result) {
   return false;
 }
 
+export function mixedGrepSkip(command, request, result) {
+  if (command !== "grep") return false;
+  if (!defaultLiteralGrep(request, result)) return false;
+  const results = result?.results || [];
+  if (results.length < 2 || results.length > JEV_CANDIDATE_CAP) return false;
+  const counts = new Map();
+  for (const item of results) {
+    const tier = pathTier(item.path);
+    counts.set(tier, (counts.get(tier) || 0) + 1);
+  }
+  if (counts.size < 2) return false;
+  for (const count of counts.values()) {
+    if (count !== 1) return false;
+  }
+  return true;
+}
+
 export async function rerank(
   command,
   request,
@@ -379,6 +396,12 @@ export async function maybeRerank(command, request, result, options) {
     return withJev(
       { ...result, preserveOrder: true },
       { applied: false, skipped: "tier_order" },
+    );
+  }
+  if (mixedGrepSkip(command, request, result)) {
+    return withJev(
+      { ...result, preserveOrder: true },
+      { applied: false, skipped: "mixed_grep" },
     );
   }
   try {

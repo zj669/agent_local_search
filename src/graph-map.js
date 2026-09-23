@@ -45,6 +45,9 @@ export const DEFINITION_KINDS = new Set([
 ]);
 
 const TEST_PATH = /(^|\/)tests?(\/|$)|_test\.|spec\.|__tests__|\.test\./;
+const BENCH_SEGMENT = /(^|\/)(benchmarks?|bench)(\/|$)/i;
+const NAMED_TESTS_SEGMENT = /(^|\/)[^/]+[-_]tests?(\/|$)/i;
+const ROOT_BENCHMARK = /^benchmarks?\.(js|cjs|mjs|ts|py)$/i;
 
 const STOP_WORDS = new Set([
   "a",
@@ -95,7 +98,13 @@ export function kindRank(kind) {
 }
 
 export function isTestPath(filePath) {
-  return TEST_PATH.test(String(filePath || "").replace(/\\/g, "/"));
+  const path = String(filePath || "").replace(/\\/g, "/");
+  if (TEST_PATH.test(path)) return true;
+  if (BENCH_SEGMENT.test(path)) return true;
+  if (NAMED_TESTS_SEGMENT.test(path)) return true;
+  const relative = path.replace(/^\.\/+/, "");
+  const segments = relative.split("/").filter((part) => part && part !== ".");
+  return segments.length === 1 && ROOT_BENCHMARK.test(segments[0]);
 }
 
 export function inPathScope(filePath, constraint) {

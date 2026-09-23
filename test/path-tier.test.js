@@ -15,6 +15,7 @@ import {
   applyGrepWindow,
   isConfigPath,
   isDocsPath,
+  isExactFindMatch,
   isPreferredHit,
   pathTier,
   rankFindResults,
@@ -106,6 +107,17 @@ test("isTestPath matches foo.test.ts without treating production files as tests"
   assert.equal(isTestPath("src/pkg/foo_test.py"), true);
   assert.equal(isTestPath("src/pkg/foo.spec.ts"), true);
   assert.equal(isTestPath("src/__tests__/foo.ts"), true);
+  assert.equal(isTestPath("benchmarks/foo.js"), true);
+  assert.equal(isTestPath("benchmark/foo.js"), true);
+  assert.equal(isTestPath("bench/foo.js"), true);
+  assert.equal(isTestPath("runtime-tests/deno/a.ts"), true);
+  assert.equal(isTestPath("unit-tests/a.ts"), true);
+  assert.equal(isTestPath("e2e-tests/a.ts"), true);
+  assert.equal(isTestPath("benchmark.js"), true);
+  assert.equal(isTestPath("benchmarks.py"), true);
+  assert.equal(isTestPath("src/bench.py"), false);
+  assert.equal(isTestPath("contest/x.py"), false);
+  assert.equal(isTestPath("src/benchmark.js"), false);
   assert.equal(pathTier("src/skills/encode.ts"), 0);
   assert.equal(pathTier(".agents/skills/x/SKILL.md"), 3);
   assert.equal(pathTier("library/src/actions/args/args.test.ts"), 2);
@@ -161,6 +173,14 @@ test("pathTier demotes config/CI below production and above tests", () => {
   assert.equal(pathTier("support/jsdoc/theme.css"), 0);
   assert.equal(isConfigPath("build/pkg.js"), false);
   assert.equal(isConfigPath("src/distributed/mod.py"), false);
+
+  assert.equal(pathTier("benchmarks/foo.js"), 2);
+  assert.equal(pathTier("benchmarks/routers-deno/src/find-my-way.mts"), 2);
+  assert.equal(pathTier("runtime-tests/deno/a.ts"), 2);
+  assert.equal(pathTier("runtime-tests/a.ts"), 2);
+  assert.equal(pathTier("benchmark.js"), 2);
+  assert.equal(pathTier("src/bench.py"), 0);
+  assert.equal(pathTier("contest/x.py"), 0);
 });
 
 test("find ranking uses pathTier before exact pin, and pins exact only in production", () => {
@@ -249,6 +269,42 @@ test("find ranking uses pathTier before exact pin, and pins exact only in produc
   assert.deepEqual(
     auxSameTier.map((item) => item.path),
     [".gitignore", ".editorconfig", "LICENSE"],
+  );
+});
+
+test("find pins live FFF exact_filename only inside pathTier 0", () => {
+  assert.equal(isExactFindMatch("exact"), true);
+  assert.equal(isExactFindMatch("exact_filename"), true);
+  assert.equal(isExactFindMatch("exact_path"), false);
+  assert.equal(isExactFindMatch("fuzzy_filename"), false);
+  assert.equal(isExactFindMatch("fuzzy_path"), false);
+  assert.equal(isExactFindMatch("prefix"), false);
+
+  const ranked = rankFindResults([
+    { path: "src/a.py", matchType: "fuzzy_filename" },
+    { path: "src/b.py", matchType: "exact_filename" },
+  ]);
+  assert.deepEqual(
+    ranked.map((item) => item.path),
+    ["src/b.py", "src/a.py"],
+  );
+
+  const pathTierFirst = rankFindResults([
+    { path: ".gitignore", matchType: "exact_filename" },
+    { path: "src/a.py", matchType: "fuzzy_path" },
+  ]);
+  assert.deepEqual(
+    pathTierFirst.map((item) => item.path),
+    ["src/a.py", ".gitignore"],
+  );
+
+  const noExactPathPin = rankFindResults([
+    { path: "src/a.py", matchType: "fuzzy_path" },
+    { path: "src/b.py", matchType: "exact_path" },
+  ]);
+  assert.deepEqual(
+    noExactPathPin.map((item) => item.path),
+    ["src/a.py", "src/b.py"],
   );
 });
 
