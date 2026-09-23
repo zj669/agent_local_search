@@ -2,6 +2,11 @@
  * Native Pi extension factory. Registers find / grep / graph with those names
  * so they override Pi builtins (rg / fd). queryDaemon is injected by the
  * default entry and must only run inside execute, never while registering.
+ *
+ * Pi's default active set is read, bash, edit, write, then extension names, so
+ * bash is listed before codeq. setActiveTools / selectedTools can reorder; if
+ * Pi still emits builtins first, a leading guideline still tells the model not
+ * to bash ls/grep/rg/find. Bash stays registered and is not intercepted.
  */
 import { Type } from "typebox";
 import {
@@ -211,6 +216,98 @@ export function wrapTuiLine(text, width) {
   return lines;
 }
 
+export const CODEQ_TOOL_NAMES = ["find", "grep", "graph"];
+
+export const CODEQ_BEFORE_BASH_GUIDELINE =
+  "Use find, grep, and graph for files and contents; do not use bash for ls, grep, rg, or find. Keep bash for real shell work.";
+
+export function prioritizeCodeqTools(names) {
+  if (!Array.isArray(names)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const name of CODEQ_TOOL_NAMES) {
+    if (names.includes(name) && !seen.has(name)) {
+      seen.add(name);
+      out.push(name);
+    }
+  }
+  for (const name of names) {
+    if (typeof name === "string" && name.length > 0 && !seen.has(name)) {
+      seen.add(name);
+      out.push(name);
+    }
+  }
+  return out;
+}
+
+function leadGuideline(list, guideline) {
+  if (!Array.isArray(list)) return [guideline];
+  if (list[0] === guideline) return list;
+  const next = list.filter((line) => line !== guideline);
+  next.unshift(guideline);
+  return next;
+}
+
+export function applyCodeqPromptOrder(options) {
+  if (!options || typeof options !== "object") return options;
+  const original = Array.isArray(options.selectedTools)
+    ? options.selectedTools.slice()
+    : [];
+  if (Array.isArray(options.selectedTools)) {
+    options.selectedTools = prioritizeCodeqTools(options.selectedTools);
+  }
+  options.promptGuidelines = leadGuideline(
+    options.promptGuidelines,
+    CODEQ_BEFORE_BASH_GUIDELINE,
+  );
+  const originalFirst = original[0];
+  if (
+    originalFirst &&
+    !CODEQ_TOOL_NAMES.includes(originalFirst) &&
+    options.toolGuidelines &&
+    typeof options.toolGuidelines === "object"
+  ) {
+    options.toolGuidelines[originalFirst] = leadGuideline(
+      options.toolGuidelines[originalFirst],
+      CODEQ_BEFORE_BASH_GUIDELINE,
+    );
+  }
+  return options;
+}
+
+export function applyCodeqActiveTools(pi) {
+  if (
+    !pi ||
+    typeof pi.getActiveTools !== "function" ||
+    typeof pi.setActiveTools !== "function"
+  ) {
+    return;
+  }
+  let active;
+  try {
+    active = pi.getActiveTools();
+  } catch {
+    return;
+  }
+  if (!Array.isArray(active) || active.length === 0) return;
+  const names = [];
+  for (const item of active) {
+    const name = typeof item === "string" ? item : item?.name;
+    if (typeof name === "string" && name.length > 0) names.push(name);
+  }
+  if (names.length === 0) return;
+  const next = prioritizeCodeqTools(names);
+  if (next.length === 0) return;
+  if (next.length === names.length && next.every((name, i) => name === names[i])) {
+    return;
+  }
+  try {
+    pi.setActiveTools(next);
+  } catch {
+    // before_agent_start still reorders selectedTools / promptGuidelines.
+  }
+}
+
 function paintWrapped(lines, theme, color) {
   return lines.map((line) => paint(theme, color, line));
 }
@@ -346,6 +443,7 @@ export function createCodeqExtension({
       description: FIND_DESCRIPTION,
       promptSnippet: "Find files by name or path (codeq / FFF, not fd)",
       promptGuidelines: [
+        CODEQ_BEFORE_BASH_GUIDELINE,
         "find is codeq path search, not a glob tool and not fd: pass profile, not **/*profile*.",
         "find matches the whole indexed path, including dotfiles such as .cursor/rules. Use grep for contents and graph for call chains.",
         "find searches one repository per call. Pass root for another checkout; pass path to narrow inside the selected root. Never merge results across repositories.",
@@ -372,6 +470,7 @@ export function createCodeqExtension({
       description: GREP_DESCRIPTION,
       promptSnippet: "Search file contents (codeq / FFF, not rg)",
       promptGuidelines: [
+        CODEQ_BEFORE_BASH_GUIDELINE,
         "grep is codeq content search, not rg. regex is required: false for a literal string, true for a regular expression.",
         "grep is exact by default: zero hits means zero hits. Pass fuzzy: true only for approximate/different identifiers; those replies are labelled [fuzzy].",
         "grep searches one repository per call. Pass root for another checkout; pass path to narrow. Continuation uses an opaque cursor bound to the same search.",
@@ -439,6 +538,7 @@ export function createCodeqExtension({
       description: GRAPH_DESCRIPTION,
       promptSnippet: "Explore the code graph (codeq / CodeGraph)",
       promptGuidelines: [
+        CODEQ_BEFORE_BASH_GUIDELINE,
         "graph is codeq CodeGraph explore, not a written answer. Query identifiers, how X works, where X is defined, or who calls / uses X — not a multi-paragraph question.",
         "graph: for how-it-works, Read the entry. For who-calls or where-used, use the callers locators; do not grep that name first. There is no callers tool.",
         "graph searches one repository per call. Pass root for another checkout; pass path to narrow. Replies are locators, never source.",
@@ -464,5 +564,12 @@ export function createCodeqExtension({
     for (const tool of tools) {
       pi.registerTool(tool);
     }
+    pi.on("session_start", () => {
+      applyCodeqActiveTools(pi);
+    });
+    pi.on("before_agent_start", (event) => {
+      applyCodeqActiveTools(pi);
+      applyCodeqPromptOrder(event?.systemPromptOptions);
+    });
   };
 }

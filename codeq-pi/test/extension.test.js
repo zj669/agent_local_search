@@ -4,7 +4,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
+  applyCodeqActiveTools,
+  applyCodeqPromptOrder,
+  CODEQ_BEFORE_BASH_GUIDELINE,
+  CODEQ_TOOL_NAMES,
   createCodeqExtension,
+  prioritizeCodeqTools,
   SAFE_TUI_WIDTH,
   wrapTuiLine,
 } from "../src/extension.js";
@@ -17,9 +22,10 @@ function readSrc(relative) {
   return readFileSync(join(pkgRoot, relative), "utf8");
 }
 
-function mockPi() {
+function mockPi(activeToolNames = []) {
   const tools = [];
   const events = [];
+  let activeTools = [...activeToolNames];
   return {
     tools,
     events,
@@ -29,11 +35,65 @@ function mockPi() {
     unregisterTool() {
       throw new Error("unregisterTool must not be called");
     },
+    getActiveTools() {
+      return [...activeTools];
+    },
+    setActiveTools(names) {
+      activeTools = [...names];
+    },
     on(event, handler) {
       events.push({ event, handler });
     },
   };
 }
+
+function handler(pi, event) {
+  return pi.events.find((entry) => entry.event === event)?.handler;
+}
+
+/** Same rule order Pi 0.87.1 uses in buildRules / <tools>. */
+function piToolsAndRules(selectedTools, snippets, toolGuidelines, promptGuidelines) {
+  const tools = selectedTools
+    .filter((name) => snippets[name])
+    .map((name) => `- ${name}: ${snippets[name]}`);
+  const rules = [];
+  const seen = new Set();
+  const addRule = (rule) => {
+    const normalized = rule.trim();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    rules.push(normalized);
+  };
+  const hasBash = selectedTools.includes("bash");
+  const hasGrep = selectedTools.includes("grep");
+  const hasFind = selectedTools.includes("find");
+  const hasLs = selectedTools.includes("ls");
+  if (hasBash && !hasGrep && !hasFind && !hasLs) {
+    addRule("Use bash for file operations like ls, rg, find");
+  }
+  for (const name of selectedTools) {
+    for (const rule of toolGuidelines[name] ?? []) addRule(rule);
+  }
+  for (const rule of promptGuidelines ?? []) addRule(rule);
+  return { tools, rules };
+}
+
+const DEFAULT_ACTIVE = [
+  "read",
+  "bash",
+  "edit",
+  "write",
+  "find",
+  "grep",
+  "graph",
+];
+
+const PI_SNIPPETS = {
+  read: "Read file contents",
+  bash: "Execute bash commands (ls, grep, find, etc.)",
+  edit: "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",
+  write: "Create or overwrite files",
+};
 
 function load(options = {}) {
   const calls = [];
@@ -102,6 +162,11 @@ test("entry wires queryDaemon lazily and never FileFinder / pi-fff", () => {
   assert.equal(combined.includes("FileFinder"), false);
   assert.equal(combined.includes("@ff-labs/pi-fff"), false);
   assert.equal(combined.includes("unregisterTool"), false);
+  assert.equal(combined.includes("tool_call"), false);
+  assert.equal(combined.includes("user_bash"), false);
+  assert.match(extension, /setActiveTools/);
+  assert.match(extension, /selectedTools/);
+  assert.match(extension, /CODEQ_BEFORE_BASH_GUIDELINE/);
   assert.equal(combined.includes("CODEQ_CWD"), false);
   assert.equal(combined.includes("--exclude-tools"), false);
   assert.equal(combined.includes("leagent"), false);
@@ -125,7 +190,10 @@ test("factory registers grep, find, and graph only, without querying", async () 
   );
   assert.equal(pi.tools.length, 3);
   assert.equal(queried, false);
-  assert.deepEqual(pi.events, []);
+  assert.deepEqual(
+    pi.events.map((entry) => entry.event),
+    ["session_start", "before_agent_start"],
+  );
   for (const tool of pi.tools) {
     assert.equal(typeof tool.promptSnippet, "string");
     assert.equal(Array.isArray(tool.promptGuidelines), true);
@@ -161,6 +229,9 @@ test("factory registers grep, find, and graph only, without querying", async () 
   );
   assert.match(pi.tools[0].promptGuidelines.join("\n"), /not a glob/);
   assert.match(pi.tools[1].promptGuidelines.join("\n"), /literal string/);
+  assert.equal(pi.tools[0].promptGuidelines[0], CODEQ_BEFORE_BASH_GUIDELINE);
+  assert.equal(pi.tools[1].promptGuidelines[0], CODEQ_BEFORE_BASH_GUIDELINE);
+  assert.equal(pi.tools[2].promptGuidelines[0], CODEQ_BEFORE_BASH_GUIDELINE);
   assert.equal(Boolean(pi.tools[1].parameters.properties.regex), true);
   assert.ok(pi.tools[1].parameters.required.includes("regex"));
   assert.ok(pi.tools[1].parameters.required.includes("pattern"));
@@ -184,6 +255,188 @@ test("factory registers grep, find, and graph only, without querying", async () 
   assert.equal(pi.tools[1].description.includes("host Ripgrep"), false);
   assert.equal(Boolean(pi.tools[0].parameters.properties.context), false);
   assert.equal(Boolean(pi.tools[2].parameters.properties.context), false);
+});
+
+test("prioritizeCodeqTools puts find/grep/graph before bash and keeps bash", () => {
+  assert.deepEqual(CODEQ_TOOL_NAMES, ["find", "grep", "graph"]);
+  assert.deepEqual(prioritizeCodeqTools(DEFAULT_ACTIVE), [
+    "find",
+    "grep",
+    "graph",
+    "read",
+    "bash",
+    "edit",
+    "write",
+  ]);
+  assert.deepEqual(
+    prioritizeCodeqTools(["read", "bash", "edit", "write", "grep", "graph"]),
+    ["grep", "graph", "read", "bash", "edit", "write"],
+  );
+  assert.deepEqual(prioritizeCodeqTools(["find", "grep", "graph"]), [
+    "find",
+    "grep",
+    "graph",
+  ]);
+  assert.deepEqual(
+    prioritizeCodeqTools(["read", "bash", "my_tool", "find"]),
+    ["find", "read", "bash", "my_tool"],
+  );
+  assert.deepEqual(prioritizeCodeqTools(["read", "bash", "edit", "write"]), [
+    "read",
+    "bash",
+    "edit",
+    "write",
+  ]);
+  assert.ok(prioritizeCodeqTools(DEFAULT_ACTIVE).includes("bash"));
+});
+
+test("session_start lists find/grep/graph before bash in the Pi <tools> list", () => {
+  const { pi, byName } = load();
+  pi.setActiveTools(DEFAULT_ACTIVE);
+  handler(pi, "session_start")();
+  const names = pi.getActiveTools();
+  assert.deepEqual(names.slice(0, 3), ["find", "grep", "graph"]);
+  assert.ok(names.includes("bash"));
+  const snippets = {
+    ...PI_SNIPPETS,
+    find: byName.find.promptSnippet,
+    grep: byName.grep.promptSnippet,
+    graph: byName.graph.promptSnippet,
+  };
+  const { tools, rules } = piToolsAndRules(
+    names,
+    snippets,
+    Object.fromEntries(
+      Object.entries(byName).map(([name, tool]) => [name, tool.promptGuidelines]),
+    ),
+    [],
+  );
+  const bashAt = tools.findIndex((line) => line.startsWith("- bash:"));
+  assert.ok(bashAt > 2);
+  assert.equal(tools[0], `- find: ${byName.find.promptSnippet}`);
+  assert.equal(tools[1], `- grep: ${byName.grep.promptSnippet}`);
+  assert.equal(tools[2], `- graph: ${byName.graph.promptSnippet}`);
+  assert.match(tools[bashAt], /ls, grep, find/);
+  assert.equal(rules[0], CODEQ_BEFORE_BASH_GUIDELINE);
+  assert.equal(
+    rules.filter((line) => line === CODEQ_BEFORE_BASH_GUIDELINE).length,
+    1,
+  );
+});
+
+test("before_agent_start reorders selectedTools and leads promptGuidelines", () => {
+  const { pi, byName } = load();
+  pi.setActiveTools(DEFAULT_ACTIVE);
+  const event = {
+    systemPromptOptions: {
+      selectedTools: [...DEFAULT_ACTIVE],
+      promptGuidelines: ["Be concise in your responses"],
+      toolGuidelines: {
+        read: ["Use read to examine files instead of cat or sed."],
+        bash: [
+          "You can inspect PI_* environment variables for current model and session details.",
+        ],
+        find: [...byName.find.promptGuidelines],
+        grep: [...byName.grep.promptGuidelines],
+        graph: [...byName.graph.promptGuidelines],
+      },
+    },
+  };
+  handler(pi, "before_agent_start")(event);
+  assert.deepEqual(pi.getActiveTools().slice(0, 3), ["find", "grep", "graph"]);
+  assert.ok(pi.getActiveTools().includes("bash"));
+  assert.deepEqual(event.systemPromptOptions.selectedTools.slice(0, 3), [
+    "find",
+    "grep",
+    "graph",
+  ]);
+  assert.equal(
+    event.systemPromptOptions.promptGuidelines[0],
+    CODEQ_BEFORE_BASH_GUIDELINE,
+  );
+  const snippets = {
+    ...PI_SNIPPETS,
+    find: byName.find.promptSnippet,
+    grep: byName.grep.promptSnippet,
+    graph: byName.graph.promptSnippet,
+  };
+  const { tools, rules } = piToolsAndRules(
+    event.systemPromptOptions.selectedTools,
+    snippets,
+    event.systemPromptOptions.toolGuidelines,
+    event.systemPromptOptions.promptGuidelines,
+  );
+  assert.equal(tools[0].startsWith("- find:"), true);
+  assert.ok(
+    tools.findIndex((line) => line.startsWith("- bash:")) >
+      tools.findIndex((line) => line.startsWith("- graph:")),
+  );
+  assert.equal(rules[0], CODEQ_BEFORE_BASH_GUIDELINE);
+});
+
+test("when Pi keeps builtins first, the bash guideline still leads <rules>", () => {
+  const { byName } = load();
+  const original = [...DEFAULT_ACTIVE];
+  const options = {
+    selectedTools: [...original],
+    promptGuidelines: [],
+    toolGuidelines: {
+      read: ["Use read to examine files instead of cat or sed."],
+      bash: [
+        "You can inspect PI_* environment variables for current model and session details.",
+      ],
+      find: [...byName.find.promptGuidelines],
+      grep: [...byName.grep.promptGuidelines],
+      graph: [...byName.graph.promptGuidelines],
+    },
+  };
+  applyCodeqPromptOrder(options);
+  const { tools, rules } = piToolsAndRules(
+    original,
+    {
+      ...PI_SNIPPETS,
+      find: byName.find.promptSnippet,
+      grep: byName.grep.promptSnippet,
+      graph: byName.graph.promptSnippet,
+    },
+    options.toolGuidelines,
+    options.promptGuidelines,
+  );
+  assert.equal(tools[0], `- read: ${PI_SNIPPETS.read}`);
+  assert.equal(tools[1], `- bash: ${PI_SNIPPETS.bash}`);
+  assert.equal(rules[0], CODEQ_BEFORE_BASH_GUIDELINE);
+  assert.equal(options.toolGuidelines.read[0], CODEQ_BEFORE_BASH_GUIDELINE);
+  assert.equal(options.promptGuidelines[0], CODEQ_BEFORE_BASH_GUIDELINE);
+});
+
+test("applyCodeqActiveTools does not drop bash or add a fourth tool", () => {
+  const pi = mockPi(DEFAULT_ACTIVE);
+  applyCodeqActiveTools(pi);
+  assert.deepEqual(pi.getActiveTools(), [
+    "find",
+    "grep",
+    "graph",
+    "read",
+    "bash",
+    "edit",
+    "write",
+  ]);
+  const missing = mockPi(["read", "bash", "edit", "write"]);
+  applyCodeqActiveTools(missing);
+  assert.deepEqual(missing.getActiveTools(), [
+    "read",
+    "bash",
+    "edit",
+    "write",
+  ]);
+  const noApi = { registerTool() {}, on() {} };
+  applyCodeqActiveTools(noApi);
+  const { pi: loaded } = load();
+  assert.equal(loaded.tools.length, 3);
+  assert.equal(
+    loaded.events.some((entry) => entry.event === "tool_call"),
+    false,
+  );
 });
 
 test("execute reads ctx.cwd on every call and never caches it", async () => {
