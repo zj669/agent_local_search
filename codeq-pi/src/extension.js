@@ -4,6 +4,7 @@
  * default entry and must only run inside execute, never while registering.
  */
 import { Type } from "typebox";
+import { EMPTY_TOOL_MENU } from "@zj669/codeq/src/mcp-format.js";
 
 const PATH_DESCRIPTION =
   "Narrow this call inside the selected root; never selects an index. Relative paths are relative to that root.";
@@ -100,7 +101,7 @@ function sessionCwd(ctx) {
 function toolRequest(name, params, cwd) {
   if (name === "find") {
     if (typeof params.query !== "string" || params.query.trim() === "") {
-      throw new Error("find requires query");
+      throw new Error(EMPTY_TOOL_MENU);
     }
     const request = {
       command: "find",
@@ -116,7 +117,7 @@ function toolRequest(name, params, cwd) {
   }
   if (name === "grep") {
     if (typeof params.pattern !== "string" || params.pattern.trim() === "") {
-      throw new Error("grep requires pattern");
+      throw new Error(EMPTY_TOOL_MENU);
     }
     const request = {
       command: "grep",
@@ -136,7 +137,7 @@ function toolRequest(name, params, cwd) {
   }
   if (name === "graph") {
     if (typeof params.query !== "string" || params.query.trim() === "") {
-      throw new Error("graph requires query");
+      throw new Error(EMPTY_TOOL_MENU);
     }
     const request = {
       command: "graph",

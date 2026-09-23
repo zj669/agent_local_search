@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createCodeqExtension } from "../src/extension.js";
-import { formatMcpToolResult } from "../../src/mcp-format.js";
+import { EMPTY_TOOL_MENU, formatMcpToolResult } from "../../src/mcp-format.js";
 import { maybeRerank } from "../../src/jev.js";
 
 const pkgRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -129,6 +129,11 @@ test("factory registers grep, find, and graph only, without querying", async () 
   }
   assert.match(pi.tools[0].description, /not Pi's builtin fd/);
   assert.match(pi.tools[1].description, /not Pi's builtin rg/);
+  assert.equal(pi.tools[1].description.includes("host Ripgrep"), false);
+  assert.equal(
+    pi.tools[1].description.includes("do not open host Ripgrep"),
+    false,
+  );
   assert.match(pi.tools[1].description, /literal string/);
   assert.match(pi.tools[2].description, /direct callees, and direct callers/);
   assert.match(pi.tools[2].description, /There is no callers tool/);
@@ -358,6 +363,40 @@ test("missing session cwd is an error and does not query", async () => {
   assert.equal(queried, false);
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /ctx\.cwd/);
+});
+
+test("missing required find/grep/graph strings return the shared menu", async () => {
+  let queried = false;
+  const { byName } = load({
+    query: async () => {
+      queried = true;
+      return { status: "ready", results: [] };
+    },
+  });
+  const ctx = { cwd: "/session" };
+  const find = await byName.find.execute("1", {}, undefined, undefined, ctx);
+  const grep = await byName.grep.execute(
+    "2",
+    { pattern: "" },
+    undefined,
+    undefined,
+    ctx,
+  );
+  const graph = await byName.graph.execute(
+    "3",
+    { query: "  " },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.equal(queried, false);
+  assert.equal(find.isError, true);
+  assert.equal(grep.isError, true);
+  assert.equal(graph.isError, true);
+  assert.equal(find.content[0].text, EMPTY_TOOL_MENU);
+  assert.equal(grep.content[0].text, EMPTY_TOOL_MENU);
+  assert.equal(graph.content[0].text, EMPTY_TOOL_MENU);
+  assert.equal(find.content[0].text.includes("find requires query"), false);
 });
 
 test("rerank runs before format, matching CLI/MCP", async () => {
@@ -630,7 +669,8 @@ test("graph exact neighborhood skip matches CLI and empty entries are not that s
     mapped.content[0].text,
     /graph "how does render_widget work" — exact render_widget/,
   );
-  assert.match(mapped.content[0].text, /^callers: show src\/pkg\/widget\.py:25$/m);
+  assert.match(mapped.content[0].text, /^callers$/m);
+  assert.match(mapped.content[0].text, /^src\/pkg\/widget\.py:25-27 show$/m);
   const missed = await byName.graph.execute(
     "2",
     { query: "how does missing_widget work" },

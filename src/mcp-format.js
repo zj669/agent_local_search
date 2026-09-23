@@ -19,6 +19,11 @@ Every reply's first line names the resolved absolute root and via (root argument
 
 Replies are locators. Read source with the host Read tool.`;
 
+export const EMPTY_TOOL_MENU = `codeq needs find.query, grep.pattern, or graph.query — do not call with {}.
+find: path fragment (not a glob, not "a or b").
+grep: literal token; regex:true only for a real regexp (| or groups).
+graph: one identifier (callers/callees/how-it-works). Then host Read the spans.`;
+
 export function rootOrigin(result = {}) {
   if (result.rootSource === "root") return "root argument";
   if (result.rootSource === "path") return "path argument";
@@ -87,8 +92,34 @@ function countFiles(items) {
   return new Set(items.map((item) => item.path)).size;
 }
 
+const UNESCAPED_ALTERNATION_OR_GROUP = /(?:^|[^\\])(?:\\\\)*[|()]/;
+
+function hasUnescapedAlternationOrGroup(pattern) {
+  return UNESCAPED_ALTERNATION_OR_GROUP.test(String(pattern || ""));
+}
+
 function looksLikeRegexWildcards(pattern) {
-  return /\.\*|\.\+/.test(String(pattern || ""));
+  const text = String(pattern || "");
+  return /\.\*|\.\+/.test(text) || hasUnescapedAlternationOrGroup(text);
+}
+
+function isIdentifierPattern(pattern) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(pattern || "").trim());
+}
+
+function findBooleanOrHint(query) {
+  const text = String(query ?? "");
+  if (!/\bor\b/.test(text)) return null;
+  const parts = text
+    .split(/\bor\b/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2) {
+    return 'find is not boolean; use two find calls, not "a or b".';
+  }
+  return `find is not boolean; search ${parts
+    .map((part) => `"${part}"`)
+    .join(" and ")} as two find calls.`;
 }
 
 function orderGrepHits(hits, pattern, preserveOrder) {
@@ -154,6 +185,10 @@ function formatFind(result) {
       `find uses path fragments, not globs; try "${literalFragment(query) || "the name"}".`,
     );
   }
+  if (shown === 0) {
+    const orHint = findBooleanOrHint(query);
+    if (orHint) lines.push("", orHint);
+  }
 
   return {
     lines,
@@ -217,10 +252,22 @@ function formatGrep(result) {
       );
     }
     if (looksLikeRegexWildcards(pattern) && !result.regex) {
-      lines.push("regex:true if this was a regular expression");
+      lines.push(
+        "regex:true if this was a regular expression; this grep was literal",
+      );
     }
   } else if (truncated) {
     lines.push("", "more: next page available");
+  }
+
+  if (
+    hits.length > 0 &&
+    !fuzzy &&
+    mode !== "regex" &&
+    !result.regex &&
+    isIdentifierPattern(pattern)
+  ) {
+    lines.push(`callers/callees: graph ${String(pattern).trim()}`);
   }
 
   return {
@@ -299,12 +346,8 @@ function formatGraph(result) {
       }
     }
     if (callers.length > 0) {
-      lines.push(
-        "",
-        `callers: ${callers
-          .map((caller) => `${caller.name} ${caller.path}:${caller.line}`)
-          .join("; ")}`,
-      );
+      lines.push("", "callers");
+      appendLocators(lines, callers, (caller) => caller.name);
       if (hiddenCallers.length > 0) {
         lines.push(`+${hiddenCallers.length} callers omitted`);
       }

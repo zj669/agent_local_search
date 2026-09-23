@@ -13,6 +13,7 @@ import {
   negotiateProtocolVersion,
   NO_WORKSPACE_ERROR,
 } from "../src/mcp.js";
+import { EMPTY_TOOL_MENU } from "../src/mcp-format.js";
 
 const { version } = createRequire(import.meta.url)("../package.json");
 
@@ -410,6 +411,86 @@ test("unknown tools and daemon failures are tool errors, not extra commands", as
   );
 });
 
+test("unnamed or empty tools/call returns the shared menu; a real unknown name does not", async () => {
+  const seen = [];
+  await withServer(
+    {
+      query: async (request) => {
+        seen.push(request);
+        return { root: "/repo", status: "ready", results: [] };
+      },
+    },
+    async ({ send, waitFor }) => {
+      send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {} },
+      });
+      await waitFor((message) => message.id === 1);
+
+      send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: {} });
+      const unnamed = await waitFor((message) => message.id === 2);
+      assert.equal(unnamed.result.isError, true);
+      assert.equal(unnamed.result.content[0].text, EMPTY_TOOL_MENU);
+
+      send({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "tools/call",
+        params: { name: "   ", arguments: {} },
+      });
+      const blankName = await waitFor((message) => message.id === 3);
+      assert.equal(blankName.result.content[0].text, EMPTY_TOOL_MENU);
+
+      send({
+        jsonrpc: "2.0",
+        id: 4,
+        method: "tools/call",
+        params: { name: "grep", arguments: {} },
+      });
+      const emptyGrep = await waitFor((message) => message.id === 4);
+      assert.equal(emptyGrep.result.isError, true);
+      assert.equal(emptyGrep.result.content[0].text, EMPTY_TOOL_MENU);
+      assert.equal(
+        emptyGrep.result.content[0].text.includes("grep requires pattern"),
+        false,
+      );
+
+      send({
+        jsonrpc: "2.0",
+        id: 5,
+        method: "tools/call",
+        params: { name: "find" },
+      });
+      const missingArgs = await waitFor((message) => message.id === 5);
+      assert.equal(missingArgs.result.content[0].text, EMPTY_TOOL_MENU);
+
+      send({
+        jsonrpc: "2.0",
+        id: 6,
+        method: "tools/call",
+        params: { name: "graph", arguments: { query: "  " } },
+      });
+      const blankQuery = await waitFor((message) => message.id === 6);
+      assert.equal(blankQuery.result.content[0].text, EMPTY_TOOL_MENU);
+
+      send({
+        jsonrpc: "2.0",
+        id: 7,
+        method: "tools/call",
+        params: { name: "search", arguments: { query: "x" } },
+      });
+      const unknown = await waitFor((message) => message.id === 7);
+      assert.equal(unknown.result.isError, true);
+      assert.equal(unknown.result.content[0].text, "unknown tool: search");
+      assert.equal(unknown.result.content[0].text.includes("codeq needs"), false);
+
+      assert.equal(seen.length, 0);
+    },
+  );
+});
+
 test("path/root and cwd switch a single root with no fusion", async () => {
   const seen = [];
   await withServer(
@@ -649,6 +730,17 @@ test("HOME spawn handshake does not query; tools/call needs path or root", async
       assert.equal(seen[0].path, "/repos/beta");
       assert.equal(seen[0].cwd, homedir());
       assert.equal(seen[0].cwdSource, "spawn cwd");
+
+      send({
+        jsonrpc: "2.0",
+        id: 5,
+        method: "tools/call",
+        params: { name: "grep", arguments: {} },
+      });
+      const emptyFromHome = await waitFor((message) => message.id === 5);
+      assert.equal(emptyFromHome.result.isError, true);
+      assert.equal(emptyFromHome.result.content[0].text, NO_WORKSPACE_ERROR);
+      assert.equal(seen.length, 1);
     },
   );
 });
@@ -835,6 +927,12 @@ test("tool descriptions say when to pass root and how to shape a query", async (
     assert.match(tools.grep.inputSchema.properties.cursor.description, /opaque/i);
     assert.equal(tools.grep.description.includes("retries as fuzzy"), false);
     assert.match(tools.grep.description, /this is not rg/i);
+    assert.match(
+      tools.grep.description,
+      /do not open host Ripgrep on the same token/i,
+    );
+    assert.equal(init.result.instructions.includes("Ripgrep"), false);
+    assert.equal(tools.find.description.includes("a or b"), false);
     assert.match(tools.find.description, /not a glob/i);
     assert.match(tools.graph.description, /not an answer or source|a map, not an answer or source/);
     assert.match(tools.graph.description, /where X is defined/);
