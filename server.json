@@ -3,7 +3,7 @@
   "name": "io.github.zj669/codeq",
   "title": "codeq",
   "description": "Local find, grep, and code-graph search for one repository at a time.",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "repository": {
     "url": "https://github.com/zj669/agent_local_search",
     "source": "github"
@@ -12,7 +12,7 @@
     {
       "registryType": "npm",
       "identifier": "@zj669/codeq",
-      "version": "0.3.11",
+      "version": "0.3.12",
       "transport": {
         "type": "stdio"
       },

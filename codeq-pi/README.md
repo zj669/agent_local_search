@@ -4,10 +4,10 @@ Native [Pi](https://github.com/earendil-works/pi) coding-agent **extension**
 (not MCP). Same three tools as the `codeq` CLI: `find`, `grep`, `graph`.
 Queries go to the existing user-level codeq daemon. Same-name `grep` / `find`
 override Pi's builtin `rg` / `fd`; `graph` is new. Schema matches
-`@zj669/codeq@0.3.11` (locators, literal grep, opaque grep cursor).
+`@zj669/codeq@0.3.12` (locators, literal grep, opaque grep cursor).
 
 ```bash
-npm i -g @zj669/codeq@0.3.11
+npm i -g @zj669/codeq@0.3.12
 pi install npm:@zj669/codeq-pi
 ```
 
