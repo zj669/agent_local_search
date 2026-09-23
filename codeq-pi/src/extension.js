@@ -164,11 +164,67 @@ function paint(theme, color, text) {
   return theme?.fg ? theme.fg(color, text) : text;
 }
 
-function textComponent(text) {
-  const lines = String(text).split("\n");
+/** Fallback when Pi calls render() without a width (tests / first paint). */
+export const SAFE_TUI_WIDTH = 76;
+
+export function tuiWidth(width) {
+  if (!Number.isFinite(width) || width < 1) return SAFE_TUI_WIDTH;
+  return Math.max(1, Math.floor(width));
+}
+
+/**
+ * Wrap one plain (no ANSI) line for Pi's TUI. Prefers a break before `via`
+ * and after the freshness `root ` prefix so those tokens stay intact;
+ * hard-wraps unbreakable paths. Model-facing locator text is not passed here.
+ */
+export function wrapTuiLine(text, width) {
+  const max = tuiWidth(width);
+  const line = String(text ?? "");
+  if (line.length <= max) return [line];
+
+  const viaAt = line.indexOf(" via ");
+  if (viaAt > 0 && viaAt <= max) {
+    return [line.slice(0, viaAt), ...wrapTuiLine(line.slice(viaAt + 1), max)];
+  }
+
+  const prefix = line.match(/^(\[[^\]]+\](?:\[[^\]]+\])* root )/);
+  if (prefix && prefix[1].length < max && prefix[1].length < line.length) {
+    return [
+      line.slice(0, prefix[1].length).trimEnd(),
+      ...wrapTuiLine(line.slice(prefix[1].length), max),
+    ];
+  }
+
+  const lines = [];
+  let rest = line;
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf(" ", max);
+    if (cut < Math.floor(max / 2)) {
+      const slash = rest.lastIndexOf("/", max);
+      cut = slash >= Math.floor(max / 3) ? slash : max;
+    }
+    lines.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+    if (rest.startsWith(" ")) rest = rest.slice(1);
+  }
+  if (rest.length > 0) lines.push(rest);
+  return lines;
+}
+
+function paintWrapped(lines, theme, color) {
+  return lines.map((line) => paint(theme, color, line));
+}
+
+function textComponent(text, theme, color) {
+  const source = String(text).split("\n");
   return {
-    render() {
-      return lines;
+    render(width) {
+      const max = tuiWidth(width);
+      const out = [];
+      for (const line of source) {
+        out.push(...paintWrapped(wrapTuiLine(line, max), theme, color));
+      }
+      return out;
     },
     invalidate() {},
   };
@@ -181,28 +237,47 @@ function renderCall(name, args, theme) {
       ? trimString(args?.pattern)
       : trimString(args?.query) || trimString(args?.pattern);
   const path = trimString(args?.path) || trimString(args?.root) || ".";
-  const body = focus
+  const plain = focus ? `${name} ${focus} in ${path}` : `${name} ${path}`;
+  const styled = focus
     ? `${title} ${paint(theme, "accent", focus)} ${paint(theme, "toolOutput", `in ${path}`)}`
     : `${title} ${paint(theme, "toolOutput", path)}`;
-  return textComponent(body);
+  return {
+    render(width) {
+      const max = tuiWidth(width);
+      if (plain.length <= max) return [styled];
+      return paintWrapped(wrapTuiLine(plain, max), theme, "toolOutput");
+    },
+    invalidate() {},
+  };
 }
 
 function renderResult(result, options, theme) {
   const output =
     result?.content?.find((part) => part.type === "text")?.text?.trim() ?? "";
   if (!output) {
-    return textComponent(paint(theme, "muted", "No output"));
+    return textComponent("No output", theme, "muted");
   }
   const color = result?.isError ? "error" : "toolOutput";
   const lines = output.split("\n");
   const shown = options?.expanded ? lines : lines.slice(0, 8);
-  const painted = shown.map((line) => paint(theme, color, line));
-  if (lines.length > shown.length) {
-    painted.push(
-      paint(theme, "muted", `... (${lines.length - shown.length} more lines)`),
-    );
-  }
-  return textComponent(painted.join("\n"));
+  const more =
+    lines.length > shown.length
+      ? `... (${lines.length - shown.length} more lines)`
+      : null;
+  return {
+    render(width) {
+      const max = tuiWidth(width);
+      const out = [];
+      for (const line of shown) {
+        out.push(...paintWrapped(wrapTuiLine(line, max), theme, color));
+      }
+      if (more) {
+        out.push(...paintWrapped(wrapTuiLine(more, max), theme, "muted"));
+      }
+      return out;
+    },
+    invalidate() {},
+  };
 }
 
 function progressText(progress = {}) {
