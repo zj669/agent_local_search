@@ -7,7 +7,7 @@ import { maybeRerank } from "../src/jev.js";
 
 const USAGE = `Usage:
   codeq [--root PATH] [--json] find  <query>   [--path PATH] [--limit N]
-  codeq [--root PATH] [--json] grep  <pattern> [--path PATH] [--glob GLOB] [--context N] [--limit N] [--regex] [--fuzzy] [--cursor TOKEN]
+  codeq [--root PATH] [--json] grep  <pattern> [--path PATH] [--glob GLOB] [--context N] [--limit N] [--count] [--ignore-case] [--case-sensitive] [--regex] [--fuzzy] [--cursor TOKEN]
   codeq [--root PATH] [--json] graph <query>   [--path PATH]
   codeq mcp
 
@@ -74,6 +74,27 @@ function parseArguments(argv) {
     const arg = argv[index];
     if (arg === "--json") {
       options.json = true;
+      continue;
+    }
+    if (arg === "--count") {
+      if (command !== "grep") fail("--count is not valid for " + command);
+      options.count = true;
+      continue;
+    }
+    if (arg === "--ignore-case") {
+      if (command !== "grep") fail("--ignore-case is not valid for " + command);
+      if (options.ignoreCase === false) {
+        fail("cannot use --ignore-case and --case-sensitive together");
+      }
+      options.ignoreCase = true;
+      continue;
+    }
+    if (arg === "--case-sensitive") {
+      if (command !== "grep") fail("--case-sensitive is not valid for " + command);
+      if (options.ignoreCase === true) {
+        fail("cannot use --ignore-case and --case-sensitive together");
+      }
+      options.ignoreCase = false;
       continue;
     }
     if (arg === "--fuzzy") {

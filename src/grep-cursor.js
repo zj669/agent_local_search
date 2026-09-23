@@ -1,13 +1,21 @@
-export const GREP_CURSOR_VERSION = 3;
+export const GREP_CURSOR_VERSION = 4;
 
 export const GREP_CURSOR_ERROR =
-  "grep cursor is not valid for this search. It is opaque and bound to the same root, pattern, glob, path, regex, and fuzzy as the call that issued it. Pass that cursor back unchanged. A mismatch or a stale cursor is an error, not page 1.";
+  "grep cursor is not valid for this search. It is opaque and bound to the same root, pattern, glob, path, regex, fuzzy, context, and ignoreCase as the call that issued it. Pass that cursor back unchanged. A mismatch or a stale cursor is an error, not page 1.";
+
+export const GREP_COUNT_CURSOR_ERROR =
+  "grep count does not accept cursor";
 
 function canonical(value) {
   return String(value ?? "");
 }
 
 function payloadFor(search) {
+  const context = Number.isSafeInteger(search.context) ? search.context : 0;
+  const ignoreCase =
+    search.ignoreCase === "true" || search.ignoreCase === "false"
+      ? search.ignoreCase
+      : "default";
   return {
     v: GREP_CURSOR_VERSION,
     root: canonical(search.root),
@@ -17,6 +25,8 @@ function payloadFor(search) {
     regex: Boolean(search.regex),
     fuzzy: Boolean(search.fuzzy),
     mode: canonical(search.mode),
+    context,
+    ignoreCase,
   };
 }
 
@@ -78,6 +88,8 @@ export function openGrepCursor(token, search) {
     parsed.constraint !== expected.constraint ||
     parsed.regex !== expected.regex ||
     parsed.fuzzy !== expected.fuzzy ||
+    parsed.context !== expected.context ||
+    parsed.ignoreCase !== expected.ignoreCase ||
     !Number.isSafeInteger(parsed.offset) ||
     parsed.offset < 0 ||
     !Number.isSafeInteger(window) ||

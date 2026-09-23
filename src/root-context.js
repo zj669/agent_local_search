@@ -7,13 +7,23 @@ import { fileURLToPath } from "node:url";
 import { FileFinder } from "@ff-labs/fff-node";
 import {
   encodeNextGrepCursor,
+  GREP_COUNT_CURSOR_ERROR,
   grepCursorOffset,
   openGrepCursor,
   toFffCursor,
 } from "./grep-cursor.js";
-import { assertGrepPattern } from "./grep-mode.js";
+import {
+  assertGrepPattern,
+  grepCaseOptions,
+  ignoreCaseCursorValue,
+} from "./grep-mode.js";
 import { acquireLock } from "./lock.js";
-import { RANK_WINDOW } from "./limits.js";
+import {
+  clampGrepContext,
+  CONTEXT_CAP,
+  COUNT_SCAN_CAP,
+  RANK_WINDOW,
+} from "./limits.js";
 import { applyFindWindow, applyGrepWindow } from "./path-tier.js";
 import { rootBucket } from "./paths.js";
 import { planFindSearch, runFindSearch } from "./find-glob.js";
@@ -25,6 +35,37 @@ const GRAPH_LOCK_TIMEOUT_MS = 15 * 60 * 1_000;
 function unwrap(result, operation) {
   if (!result.ok) throw new Error(`${operation}: ${result.error}`);
   return result.value;
+}
+
+function pageMeta(options = {}) {
+  return {
+    requestedLimit:
+      Number.isSafeInteger(options.limit) && options.limit > 0
+        ? options.limit
+        : null,
+    pageCap: RANK_WINDOW,
+  };
+}
+
+function fffGrepOptions({ mode, ignoreCase, context }) {
+  return {
+    mode,
+    ...grepCaseOptions(ignoreCase),
+    pageSize: RANK_WINDOW,
+    beforeContext: context,
+    afterContext: context,
+  };
+}
+
+function mapGrepHit(item) {
+  return {
+    path: item.relativePath,
+    line: item.lineNumber,
+    column: item.col + 1,
+    text: item.lineContent,
+    contextBefore: item.contextBefore || [],
+    contextAfter: item.contextAfter || [],
+  };
 }
 
 function bundledNode() {
@@ -322,6 +363,7 @@ export class RootContext {
       indexed: value.totalFiles ?? null,
       results: applyFindWindow(mapped, options.limit),
       preserveOrder: true,
+      ...pageMeta(options),
       ...(globFallback ? { globFallback } : {}),
     };
   }
@@ -335,6 +377,10 @@ export class RootContext {
     if (options.constraint) constraints.push(options.constraint);
     if (options.glob) constraints.push(options.glob);
     const query = [...constraints, pattern].join(" ");
+    const context = clampGrepContext(options.context);
+    const contextCapped =
+      Number.isSafeInteger(options.context) && options.context > CONTEXT_CAP;
+    const ignoreCaseBound = ignoreCaseCursorValue(options.ignoreCase);
     const search = {
       root: this.root,
       pattern,
@@ -342,14 +388,26 @@ export class RootContext {
       constraint: options.constraint || "",
       regex,
       fuzzy: fuzzyRequested,
+      context,
+      ignoreCase: ignoreCaseBound,
     };
-    const grepOptions = {
+    if (options.count) {
+      if (options.cursor) throw new Error(GREP_COUNT_CURSOR_ERROR);
+      return this.#grepCount({
+        finder,
+        query,
+        pattern,
+        mode,
+        regex,
+        fuzzyRequested,
+        ignoreCase: options.ignoreCase,
+      });
+    }
+    const grepOptions = fffGrepOptions({
       mode,
-      smartCase: true,
-      pageSize: RANK_WINDOW,
-      beforeContext: options.context ?? 0,
-      afterContext: options.context ?? 0,
-    };
+      ignoreCase: options.ignoreCase,
+      context,
+    });
     let windowStart = 0;
     let rankedOffset = 0;
     if (options.cursor) {
@@ -382,14 +440,7 @@ export class RootContext {
         usedFuzzy = true;
       }
     }
-    const mapped = value.items.map((item) => ({
-      path: item.relativePath,
-      line: item.lineNumber,
-      column: item.col + 1,
-      text: item.lineContent,
-      contextBefore: item.contextBefore || [],
-      contextAfter: item.contextAfter || [],
-    }));
+    const mapped = value.items.map(mapGrepHit);
     const { ranked, page } = applyGrepWindow(
       mapped,
       pattern,
@@ -416,6 +467,77 @@ export class RootContext {
       shown: page.length,
       nextCursor,
       results: page,
+      context,
+      contextCapped,
+      ...pageMeta(options),
+    };
+  }
+
+  async #grepCount({
+    finder,
+    query,
+    pattern,
+    mode,
+    regex,
+    fuzzyRequested,
+    ignoreCase,
+  }) {
+    const grepOptions = fffGrepOptions({
+      mode,
+      ignoreCase,
+      context: 0,
+    });
+    let value = unwrap(finder.grep(query, grepOptions), "FFF content search failed");
+    let usedFuzzy = grepOptions.mode === "fuzzy";
+    if (fuzzyRequested && value.items.length === 0 && mode !== "regex") {
+      const fuzzy = unwrap(
+        finder.grep(query, { ...grepOptions, mode: "fuzzy", cursor: null }),
+        "FFF fuzzy content search failed",
+      );
+      if (fuzzy.items.length > 0) {
+        value = fuzzy;
+        usedFuzzy = true;
+        grepOptions.mode = "fuzzy";
+      }
+    }
+    let matchCount = 0;
+    const files = new Set();
+    let moreRemain = false;
+    let current = value;
+    while (true) {
+      for (const item of current.items) {
+        if (matchCount >= COUNT_SCAN_CAP) {
+          moreRemain = true;
+          break;
+        }
+        matchCount += 1;
+        files.add(item.relativePath);
+      }
+      if (moreRemain) break;
+      const next = grepCursorOffset(current.nextCursor);
+      if (!Number.isSafeInteger(next) || next <= 0) break;
+      if (current.items.length === 0) break;
+      current = unwrap(
+        finder.grep(query, { ...grepOptions, cursor: toFffCursor(next) }),
+        "FFF content search failed",
+      );
+    }
+    return {
+      ...this.metadata(),
+      pattern,
+      mode: usedFuzzy ? "fuzzy" : grepOptions.mode,
+      regex,
+      fuzzyRequested,
+      count: true,
+      matchCount,
+      fileCount: files.size,
+      countTruncated: moreRemain,
+      shown: 0,
+      nextCursor: null,
+      results: [],
+      context: 0,
+      contextCapped: false,
+      ...pageMeta({}),
     };
   }
 

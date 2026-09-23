@@ -123,6 +123,8 @@ async function execute(request, socket) {
         fuzzy: Boolean(request.fuzzy),
         regex: Boolean(request.regex),
         cursor: request.cursor,
+        count: Boolean(request.count),
+        ignoreCase: request.ignoreCase,
       });
     }
     if (request.command === "graph") {

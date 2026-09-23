@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
+  CONTEXT_CAP,
+  COUNT_SCAN_CAP,
   FIND_CAP,
   GREP_CAP,
   JEV_CANDIDATE_CAP,
@@ -55,9 +57,14 @@ test("visible caps stay 16 and the rank window is 48", () => {
   assert.equal(FIND_CAP, 16);
   assert.equal(GREP_CAP, 16);
   assert.equal(JEV_CANDIDATE_CAP, 16);
+  assert.equal(CONTEXT_CAP, 3);
+  assert.equal(COUNT_SCAN_CAP, 4096);
   assert.equal(pageLimit(4, FIND_CAP), 4);
   assert.equal(pageLimit(100, FIND_CAP), 16);
   assert.equal(pageLimit(undefined, GREP_CAP), 16);
+  assert.equal(pageLimit(30, 48, 16), 30);
+  assert.equal(pageLimit(500, 48, 16), 48);
+  assert.equal(pageLimit(undefined, 48, 16), 16);
   const src = readFileSync(
     fileURLToPath(new URL("../src/root-context.js", import.meta.url)),
     "utf8",
@@ -645,4 +652,19 @@ test("grep does not promote test files before a same-window production file is e
   const firstTest = ranked.findIndex((item) => item.path.endsWith("args.test.ts"));
   const lastProd = ranked.map((item) => item.path).lastIndexOf("src/pkg/impl.py");
   assert.ok(firstTest > lastProd);
+});
+
+test("explicit limit can use the rank window, not only the default 16", () => {
+  const results = Array.from({ length: 48 }, (_, i) => ({
+    path: `src/f${i}.ts`,
+    matchType: "fuzzy",
+  }));
+  assert.equal(applyFindWindow(results).length, 16);
+  assert.equal(applyFindWindow(results, 30).length, 30);
+  assert.equal(applyFindWindow(results, 500).length, 48);
+
+  const hits = Array.from({ length: 48 }, (_, i) => hit(`src/g${i}.ts`, 1));
+  assert.equal(applyGrepWindow(hits, "TOKEN").page.length, 16);
+  assert.equal(applyGrepWindow(hits, "TOKEN", 30).page.length, 30);
+  assert.equal(applyGrepWindow(hits, "TOKEN", 500).page.length, 48);
 });

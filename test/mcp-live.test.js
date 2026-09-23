@@ -201,3 +201,115 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
 
   assert.equal(existsSync(join(repo, ".codegraph")), false);
 });
+
+test("MCP grep context, count, and ignoreCase reach the daemon", async (t) => {
+  const parent = mkdtempSync(join(tmpdir(), "codeq-mcp-ux-"));
+  const repo = join(parent, "app");
+  const dataDir = join(parent, "data");
+  mkdirSync(join(repo, "src"), { recursive: true });
+  writeFileSync(
+    join(repo, "src", "review.ts"),
+    [
+      "const before = 1;",
+      "export class AgentReview {",
+      "  ok = true;",
+      "}",
+      "const after = 2;",
+      "",
+    ].join("\n"),
+  );
+  git(repo, "init", "-b", "main");
+  git(repo, "add", ".");
+  git(
+    repo,
+    "-c",
+    "user.name=codeq-test",
+    "-c",
+    "user.email=codeq@example.invalid",
+    "commit",
+    "-m",
+    "fixture",
+  );
+
+  const child = spawn(process.execPath, [bin, "mcp"], {
+    stdio: ["pipe", "pipe", "pipe"],
+    cwd: repo,
+    env: { ...process.env, CODEQ_DATA_DIR: dataDir },
+  });
+  t.after(() => {
+    child.kill("SIGTERM");
+    const pidFile = join(dataDir, "daemon", "daemon.pid");
+    if (existsSync(pidFile)) {
+      const pid = Number(readFileSync(pidFile, "utf8").trim());
+      if (Number.isInteger(pid) && pid > 1) {
+        try {
+          process.kill(pid, "SIGTERM");
+        } catch {}
+      }
+    }
+  });
+
+  const messages = [];
+  const parse = createFramedParser((message) => messages.push(message));
+  child.stdout.on("data", (chunk) => parse(chunk));
+  const send = (message) => child.stdin.write(encodeMessage(message));
+
+  send({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-03-26",
+      capabilities: {},
+      clientInfo: { name: "codeq-live-ux", version: "0" },
+    },
+  });
+  await waitFor(messages, (message) => message.id === 1, 5_000);
+
+  send({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: { name: "grep", arguments: { pattern: "AgentReview", context: 2 } },
+  });
+  const neighbors = await waitFor(messages, (message) => message.id === 2, 30_000);
+  assert.equal(neighbors.result.isError, undefined, neighbors.result.content[0].text);
+  assert.match(neighbors.result.content[0].text.split("\n")[0], /root /);
+  assert.match(neighbors.result.content[0].text, /via /);
+  assert.match(neighbors.result.content[0].text, /const before = 1;/);
+  assert.match(neighbors.result.content[0].text, /export class AgentReview \{/);
+  assert.match(neighbors.result.content[0].text, /ok = true;/);
+
+  send({
+    jsonrpc: "2.0",
+    id: 3,
+    method: "tools/call",
+    params: { name: "grep", arguments: { pattern: "agentreview" } },
+  });
+  const smart = await waitFor(messages, (message) => message.id === 3, 30_000);
+  assert.ok(smart.result.structuredContent.hits.length > 0, smart.result.content[0].text);
+
+  send({
+    jsonrpc: "2.0",
+    id: 4,
+    method: "tools/call",
+    params: {
+      name: "grep",
+      arguments: { pattern: "agentreview", ignoreCase: false },
+    },
+  });
+  const sensitive = await waitFor(messages, (message) => message.id === 4, 30_000);
+  assert.equal(sensitive.result.structuredContent.hits.length, 0, sensitive.result.content[0].text);
+
+  send({
+    jsonrpc: "2.0",
+    id: 5,
+    method: "tools/call",
+    params: { name: "grep", arguments: { pattern: "AgentReview", count: true } },
+  });
+  const counted = await waitFor(messages, (message) => message.id === 5, 30_000);
+  assert.deepEqual(counted.result.structuredContent.hits, []);
+  assert.ok(counted.result.structuredContent.matchCount >= 1);
+  assert.match(counted.result.content[0].text, /match(?:es)? in \d+ files?/);
+  assert.equal(counted.result.content[0].text.includes("export class"), false);
+});
