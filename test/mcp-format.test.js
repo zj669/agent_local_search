@@ -180,10 +180,10 @@ test("graph is a locator map: no source, no engine self-description", () => {
   assert.equal(text.split("src/app.ts:252-270 send").length - 1, 1);
   assert.match(text, /^src\/session\.ts:4 ready$/m);
   assert.equal(text.includes("function ready()"), false);
-  assert.ok(text.indexOf("\ncallees\n") < text.indexOf("\ncallers:"), text);
-  assert.match(text, /^callers: boot src\/main\.ts:8$/m);
-  assert.equal(text.includes("src/main.ts:8-12 boot"), false);
-  assert.doesNotMatch(text, /^callers$/m);
+  assert.ok(text.indexOf("\ncallees\n") < text.indexOf("\ncallers\n"), text);
+  assert.match(text, /^callers$/m);
+  assert.match(text, /^src\/main\.ts:8-12 boot$/m);
+  assert.doesNotMatch(text, /^callers:/m);
 
   const payload = formatted.structuredContent;
   assert.equal(payload.truncated, false);
@@ -406,7 +406,7 @@ test("grep is exact by default and never labels itself fuzzy", () => {
   });
 });
 
-test("grep zero hits check root first and only hint regex for .* / .+", () => {
+test("grep zero hits check root first and hint regex for .* . + unescaped | or groups", () => {
   const formatted = formatMcpToolResult("grep", {
     status: "ready",
     root: "/repo",
@@ -419,6 +419,7 @@ test("grep zero hits check root first and only hint regex for .* / .+", () => {
   assert.match(formatted.text, /check root above/);
   assert.match(formatted.text, /fuzzy:true only for approximate\/different identifiers/);
   assert.equal(formatted.text.includes("regex"), false);
+  assert.equal(formatted.text.includes("callers/callees"), false);
   assert.deepEqual(formatted.structuredContent.hits, []);
 
   const regexShaped = formatMcpToolResult("grep", {
@@ -429,7 +430,11 @@ test("grep zero hits check root first and only hint regex for .* / .+", () => {
     fuzzyRequested: false,
     results: [],
   });
-  assert.match(regexShaped.text, /regex:true if this was a regular expression/);
+  assert.match(
+    regexShaped.text,
+    /regex:true if this was a regular expression; this grep was literal/,
+  );
+  assert.match(regexShaped.text, /grep createSess\.\* — 0 matches/);
 });
 
 test("grep fuzzy is labelled on the first line and names what it matched", () => {
@@ -685,7 +690,8 @@ test("graph empty dump still pins exact-name definitions from the index", () => 
     formatted.structuredContent.callers.map((caller) => caller.name),
     ["boot"],
   );
-  assert.match(formatted.text, /^callers: boot src\/main\.ts:8$/m);
+  assert.match(formatted.text, /^callers$/m);
+  assert.match(formatted.text, /^src\/main\.ts:8-12 boot$/m);
   assert.equal(formatted.text.includes("fast path"), false);
   assert.equal(formatted.text.includes("skipped explore"), false);
 });
@@ -738,9 +744,9 @@ test("graph dump miss still pins an exact-name definition from the index", () =>
     formatted.structuredContent.callers.map((caller) => caller.name),
     ["handle"],
   );
-  assert.match(formatted.text, /^callers: handle src\/pkg\/api\.py:10$/m);
+  assert.match(formatted.text, /^callers$/m);
+  assert.match(formatted.text, /^src\/pkg\/api\.py:10-20 handle$/m);
   assert.match(formatted.text, /^callees$/m);
-  assert.doesNotMatch(formatted.text, /^src\/pkg\/api\.py:\d+(-\d+)? handle$/m);
 });
 
 test("graph dump miss with no exact-name definition stays empty and points at grep", () => {
@@ -872,17 +878,18 @@ test("graph caps callers independently of callees", () => {
       },
     ],
   });
-  assert.match(
-    formatted.text,
-    /^callers: caller0 src\/pkg\/caller0\.py:1; caller1 src\/pkg\/caller1\.py:2; caller2 src\/pkg\/caller2\.py:3; caller3 src\/pkg\/caller3\.py:4$/m,
-  );
+  assert.match(formatted.text, /^callers$/m);
+  assert.match(formatted.text, /^src\/pkg\/caller0\.py:1-2 caller0$/m);
+  assert.match(formatted.text, /^src\/pkg\/caller1\.py:2-3 caller1$/m);
+  assert.match(formatted.text, /^src\/pkg\/caller2\.py:3-4 caller2$/m);
+  assert.match(formatted.text, /^src\/pkg\/caller3\.py:4-5 caller3$/m);
   assert.equal(formatted.text.includes("caller4"), false);
-  assert.doesNotMatch(formatted.text, /^src\/pkg\/caller0\.py:1-2 caller0$/m);
+  assert.doesNotMatch(formatted.text, /^callers:/m);
   assert.match(formatted.text, /\+3 callers omitted/);
   assert.equal(formatted.structuredContent.callers.length, 4);
   assert.equal(formatted.structuredContent.truncated, true);
   assert.ok(
-    formatted.text.indexOf("\ncallees\n") < formatted.text.indexOf("\ncallers:"),
+    formatted.text.indexOf("\ncallees\n") < formatted.text.indexOf("\ncallers\n"),
   );
 });
 
@@ -905,9 +912,17 @@ test("graph deprioritizes test callers without dropping them until cap", () => {
       },
     ],
   });
-  assert.match(
-    formatted.text,
-    /^callers: hook src\/hooks\.ts:2; boot src\/main\.ts:8; spec test\/session\.test\.ts:4$/m,
+  assert.match(formatted.text, /^callers$/m);
+  assert.match(formatted.text, /^src\/hooks\.ts:2-3 hook$/m);
+  assert.match(formatted.text, /^src\/main\.ts:8-12 boot$/m);
+  assert.match(formatted.text, /^test\/session\.test\.ts:4-8 spec$/m);
+  assert.ok(
+    formatted.text.indexOf("src/hooks.ts:2-3 hook") <
+      formatted.text.indexOf("src/main.ts:8-12 boot"),
+  );
+  assert.ok(
+    formatted.text.indexOf("src/main.ts:8-12 boot") <
+      formatted.text.indexOf("test/session.test.ts:4-8 spec"),
   );
   assert.deepEqual(
     formatted.structuredContent.callers.map((caller) => caller.name),
@@ -942,4 +957,171 @@ test("graph caller cap keeps production callers before tests", () => {
   );
   assert.match(formatted.text, /\+1 callers omitted/);
   assert.equal(formatted.text.includes("specC"), false);
+});
+
+test("literal grep with unescaped | or groups hints regex:true and stays 0 hits", () => {
+  const hint =
+    /regex:true if this was a regular expression; this grep was literal/;
+  for (const pattern of [
+    "Foo|Bar",
+    "@app.(get|post|put|delete)",
+    "class ComparisonStatus|DatasetKind",
+    "gitlab_comment omits|代码评审",
+  ]) {
+    const formatted = formatMcpToolResult("grep", {
+      status: "ready",
+      root: "/repo",
+      pattern,
+      mode: "plain",
+      results: [],
+    });
+    assert.match(formatted.text, hint, pattern);
+    assert.match(formatted.text, /0 matches/);
+    assert.equal(formatted.structuredContent.hits.length, 0);
+    assert.equal(formatted.text.includes("[fuzzy]"), false);
+  }
+
+  const escaped = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: String.raw`Foo\|Bar`,
+    mode: "plain",
+    results: [],
+  });
+  assert.equal(escaped.text.includes("regex:true"), false);
+
+  for (const pattern of [
+    "foo.ts",
+    "process.env",
+    "array[0]",
+    "$HOME",
+    ".",
+    "[]",
+    "^",
+    "$",
+    'status === "interrupted"',
+  ]) {
+    const formatted = formatMcpToolResult("grep", {
+      status: "ready",
+      root: "/repo",
+      pattern,
+      mode: "plain",
+      results: [],
+    });
+    assert.equal(formatted.text.includes("regex:true"), false, pattern);
+  }
+
+  const alreadyRegex = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "Foo|Bar",
+    mode: "regex",
+    regex: true,
+    results: [],
+  });
+  assert.equal(alreadyRegex.text.includes("regex:true if"), false);
+});
+
+test("identifier grep appends a graph hook; phrases regex fuzzy and misses do not", () => {
+  const hit = {
+    path: "src/pkg/kinds.py",
+    line: 4,
+    column: 1,
+    text: "def dataset_kind():",
+  };
+  const hooked = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "dataset_kind",
+    mode: "plain",
+    results: [hit],
+  });
+  const lines = hooked.text.trimEnd().split("\n");
+  assert.equal(lines.at(-1), "callers/callees: graph dataset_kind");
+  assert.equal(
+    lines.filter((line) => line.startsWith("callers/callees:")).length,
+    1,
+  );
+  assert.equal(hooked.text.includes("Read"), false);
+  assert.doesNotMatch(hooked.text, /^callers$/m);
+
+  for (const pattern of [
+    "dataset_kind:",
+    "dataset_kind=bogus",
+    'status === "interrupted"',
+    "Kubernetes Pod query failed",
+  ]) {
+    const formatted = formatMcpToolResult("grep", {
+      status: "ready",
+      root: "/repo",
+      pattern,
+      mode: "plain",
+      results: [hit],
+    });
+    assert.equal(formatted.text.includes("callers/callees:"), false, pattern);
+  }
+
+  const regex = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "dataset_kind",
+    mode: "regex",
+    regex: true,
+    results: [hit],
+  });
+  assert.equal(regex.text.includes("callers/callees:"), false);
+
+  const fuzzy = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "dataset_kind",
+    mode: "fuzzy",
+    results: [hit],
+  });
+  assert.equal(fuzzy.text.includes("callers/callees:"), false);
+
+  const miss = formatMcpToolResult("grep", {
+    status: "ready",
+    root: "/repo",
+    pattern: "dataset_kind",
+    mode: "plain",
+    results: [],
+  });
+  assert.equal(miss.text.includes("callers/callees:"), false);
+});
+
+test("find or-query with zero hits teaches two find calls and does not rewrite the query", () => {
+  const miss = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "pytest.ini or pyproject.toml",
+    total: 0,
+    results: [],
+  });
+  assert.match(miss.text, /find pytest.ini or pyproject.toml — 0 matches/);
+  assert.match(
+    miss.text,
+    /find is not boolean; search "pytest.ini" and "pyproject.toml" as two find calls/,
+  );
+  assert.deepEqual(miss.structuredContent.paths, []);
+
+  const hit = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "pytest.ini or pyproject.toml",
+    total: 1,
+    results: [{ path: "pytest.ini" }],
+  });
+  assert.equal(hit.text.includes("not boolean"), false);
+  assert.deepEqual(hit.structuredContent.paths, ["pytest.ini"]);
+
+  const globOr = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "*profile* or *config*",
+    total: 0,
+    results: [],
+  });
+  assert.match(globOr.text, /find uses path fragments, not globs/);
+  assert.match(globOr.text, /find is not boolean/);
 });

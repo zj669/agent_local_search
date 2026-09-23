@@ -702,7 +702,8 @@ test("graph exact neighborhood skips the optional rerank", async () => {
     /jev|noul|prod_shortlist|exact_neighborhood|tier_order|mixed_grep|skipped/i.test(formatted.text),
     false,
   );
-  assert.match(formatted.text, /^callers: show src\/pkg\/widget\.py:25$/m);
+  assert.match(formatted.text, /^callers$/m);
+  assert.match(formatted.text, /^src\/pkg\/widget\.py:25-27 show$/m);
 });
 
 test("graph miss with empty entries is too_few, not exact_neighborhood", async () => {

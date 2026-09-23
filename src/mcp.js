@@ -1,7 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { queryDaemon } from "./client.js";
-import { formatMcpToolResult, MCP_INSTRUCTIONS } from "./mcp-format.js";
+import {
+  EMPTY_TOOL_MENU,
+  formatMcpToolResult,
+  MCP_INSTRUCTIONS,
+} from "./mcp-format.js";
 import { isUnusableWorkspace } from "./paths.js";
 import { maybeRerank } from "./jev.js";
 
@@ -92,7 +96,7 @@ const TOOLS = [
     name: "grep",
     title: "Search file contents",
     description:
-      "Literal string search by default; this is not rg. Pass regex:true for a regular expression, fuzzy:true for approximate/different identifiers. Returns matching lines.",
+      "Literal string search by default; this is not rg. After this pattern has already returned locators, do not open host Ripgrep on the same token. Pass regex:true for a regular expression, fuzzy:true for approximate/different identifiers. Returns matching lines.",
     inputSchema: {
       type: "object",
       properties: {
@@ -357,7 +361,7 @@ function positiveInteger(value, name, allowZero = false) {
 function toolRequest(name, args, cwd) {
   if (name === "find") {
     if (typeof args.query !== "string" || args.query.trim() === "") {
-      throw new Error("find requires query");
+      throw new Error(EMPTY_TOOL_MENU);
     }
     const request = {
       command: "find",
@@ -373,7 +377,7 @@ function toolRequest(name, args, cwd) {
   }
   if (name === "grep") {
     if (typeof args.pattern !== "string" || args.pattern.trim() === "") {
-      throw new Error("grep requires pattern");
+      throw new Error(EMPTY_TOOL_MENU);
     }
     const request = {
       command: "grep",
@@ -393,7 +397,7 @@ function toolRequest(name, args, cwd) {
   }
   if (name === "graph") {
     if (typeof args.query !== "string" || args.query.trim() === "") {
-      throw new Error("graph requires query");
+      throw new Error(EMPTY_TOOL_MENU);
     }
     const request = {
       command: "graph",
@@ -593,6 +597,17 @@ export function createMcpServer({
     if (method === "tools/call") {
       const name = params?.name;
       const args = params?.arguments ?? {};
+      if (typeof name !== "string" || name.trim() === "") {
+        reply({
+          jsonrpc: "2.0",
+          id,
+          result: {
+            content: [{ type: "text", text: EMPTY_TOOL_MENU }],
+            isError: true,
+          },
+        });
+        return;
+      }
       if (!TOOLS.some((tool) => tool.name === name)) {
         reply({
           jsonrpc: "2.0",
