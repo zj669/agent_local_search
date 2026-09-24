@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createFramedParser, encodeMessage } from "../src/mcp.js";
+import { isSidecarTail } from "../src/sidecar.js";
 
 const bin = fileURLToPath(new URL("../bin/codeq.js", import.meta.url));
 
@@ -182,10 +183,17 @@ test("MCP find/grep/graph reuse the daemon and do not write .codegraph", async (
   const fullText = graphFull.result.content[0].text;
   assert.equal("sourceIncluded" in graphFull.result.structuredContent, false);
   assert.equal(fullText.includes("```"), false);
+  const stripSidecar = (text) =>
+    String(text)
+      .split("\n")
+      .filter((line) => !isSidecarTail(line))
+      .join("\n");
   assert.equal(
-    fullText.split("\n").slice(1).join("\n"),
-    graph.result.content[0].text.split("\n").slice(1).join("\n"),
+    stripSidecar(fullText.split("\n").slice(1).join("\n")),
+    stripSidecar(graph.result.content[0].text.split("\n").slice(1).join("\n")),
   );
+  assert.equal(fullText.split("\n").some(isSidecarTail), true);
+  assert.equal(graph.result.content[0].text.split("\n").some(isSidecarTail), true);
 
   const typo = await waitFor(messages, (message) => message.id === 7, 30_000);
   assert.equal(typo.result.structuredContent.hits.length, 0);

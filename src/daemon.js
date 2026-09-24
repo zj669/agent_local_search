@@ -9,6 +9,7 @@ import { acquireLock } from "./lock.js";
 import { daemonPaths, resolveRequestRoot, rootBucket } from "./paths.js";
 import { RootContext } from "./root-context.js";
 import { socketIsLive } from "./socket.js";
+import { sweepSidecars } from "./sidecar.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json");
@@ -32,6 +33,9 @@ let shuttingDown = false;
 
 await mkdir(paths.daemonDir, { recursive: true });
 await mkdir(dirname(paths.log), { recursive: true });
+try {
+  sweepSidecars();
+} catch {}
 
 async function persistRegistry() {
   const value = {

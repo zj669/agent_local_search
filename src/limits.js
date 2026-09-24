@@ -9,6 +9,11 @@ export const JEV_CANDIDATE_CAP = 16;
 export const MATCH_TEXT_CHARS = 200;
 export const CONTEXT_CAP = 3;
 export const COUNT_SCAN_CAP = 4096;
+export const SIDECAR_WINDOW = 40;
+export const SIDECAR_MAX_BYTES = 64 * 1024;
+export const SIDECAR_FILE_MAX_BYTES = 16 * 1024;
+export const SIDECAR_TTL_MS = 15 * 60 * 1_000;
+export const SIDECAR_COUNT_CAP = 32;
 
 export function pageLimit(requested, cap, fallback = cap) {
   if (!Number.isSafeInteger(requested) || requested <= 0) return fallback;

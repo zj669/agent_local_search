@@ -13,6 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { createFramedParser, encodeMessage } from "../src/mcp.js";
+import { isSidecarTail } from "../src/sidecar.js";
 
 // A replay of the session that produced the 0.2.8 fix list: the window sits in
 // one worktree while every question is about another repository, so root, path
@@ -442,9 +443,14 @@ test(
         detail: "full",
       });
       assert.equal(ignoredDetail.text.includes("```"), false);
+      const stripSidecar = (text) =>
+        String(text)
+          .split("\n")
+          .filter((line) => !isSidecarTail(line))
+          .join("\n");
       assert.equal(
-        ignoredDetail.text.split("\n").slice(1).join("\n"),
-        map.text.split("\n").slice(1).join("\n"),
+        stripSidecar(ignoredDetail.text.split("\n").slice(1).join("\n")),
+        stripSidecar(map.text.split("\n").slice(1).join("\n")),
       );
     });
 

@@ -244,6 +244,11 @@ test("initialize advertises only find, grep, and graph", async () => {
     assert.equal(init.result.serverInfo.version, version);
     assert.match(init.result.instructions, /never ask the user to init/i);
     assert.match(init.result.instructions, /first line names the resolved absolute root/);
+    assert.match(init.result.instructions, /already located/);
+    assert.equal(
+      init.result.instructions.includes("Replies are locators. Read source with the host Read tool."),
+      false,
+    );
     assert.equal(/graph: how code works/i.test(init.result.instructions), false);
     assert.equal(init.result.instructions.includes("There is no callers tool"), false);
     assert.equal(/literal string, not rg/i.test(init.result.instructions), false);
@@ -1095,6 +1100,8 @@ test("tool descriptions say when to pass root and how to shape a query", async (
     );
     assert.match(tools.grep.description, /pass context \(at most 3\)/i);
     assert.match(tools.grep.description, /not host Read/i);
+    assert.match(tools.grep.description, /do not Read hit files whole/);
+    assert.match(tools.find.description, /do not find to confirm/);
     assert.match(
       tools.grep.inputSchema.properties.limit.description,
       /1-48/,
@@ -1116,7 +1123,8 @@ test("tool descriptions say when to pass root and how to shape a query", async (
     assert.match(tools.graph.description, /not an answer or source|a map, not an answer or source/);
     assert.match(tools.graph.description, /where X is defined/);
     assert.match(tools.graph.description, /who calls/);
-    assert.match(tools.graph.description, /For how-it-works, Read the entry/);
+    assert.match(tools.graph.description, /how-it-works entry span plus direct neighborhood is the locate/);
+    assert.doesNotMatch(tools.graph.description, /For how-it-works, Read the entry/);
     assert.doesNotMatch(tools.graph.description, /Read the entry first/);
     assert.match(tools.graph.description, /direct callees, and direct callers/);
     assert.match(tools.graph.description, /There is no callers tool/);
