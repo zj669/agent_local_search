@@ -109,7 +109,7 @@ function parseArguments(argv) {
     }
     if (arg === "--full" || arg === "--detail") {
       fail(
-        "0.3.12 has no --full or --detail; replies are locators (use --json for the daemon dump)",
+        "0.3.13 has no --full or --detail; replies are locators (use --json for the daemon dump)",
       );
     }
     if (takesValue.has(arg)) {
