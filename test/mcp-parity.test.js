@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { createFramedParser, encodeMessage } from "../src/mcp.js";
+import { isSidecarTail } from "../src/sidecar.js";
 
 const bin = fileURLToPath(new URL("../bin/codeq.js", import.meta.url));
 
@@ -570,10 +571,17 @@ test(
     assert.equal(/verbatim/i.test(cliGraphHuman.stdout), false);
     assert.equal(cliGraphHuman.stdout.includes("open these files"), false);
     assert.match(cliGraphHuman.stdout, /AlphaWorktreeWidget/);
-    assert.equal(
-      cliGraphHuman.stdout.trimEnd(),
-      mcpGraphWt.text.split("\n").slice(1).join("\n"),
-    );
+    const mcpMap = mcpGraphWt.text.split("\n").slice(1).join("\n");
+    const stripSidecar = (text) =>
+      String(text)
+        .split("\n")
+        .filter((line) => !isSidecarTail(line))
+        .join("\n");
+    assert.equal(stripSidecar(cliGraphHuman.stdout).trimEnd(), stripSidecar(mcpMap).trimEnd());
+    assert.equal(cliGraphHuman.stdout.split("\n").some(isSidecarTail), true);
+    assert.equal(mcpMap.split("\n").some(isSidecarTail), true);
+    assert.equal(cliGraphHuman.stdout.includes("next: Read"), false);
+    assert.equal(mcpGraphWt.text.includes("next: Read"), false);
 
     const cliGraphFull = cli(
       ["--full", "graph", "alphaWorktreeBeacon AlphaWorktreeWidget"],

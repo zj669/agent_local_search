@@ -57,7 +57,7 @@ const TOOLS = [
     name: "find",
     title: "Find files",
     description:
-      "Fuzzy file/path lookup, including dotfiles. Query is a path fragment, not a glob.",
+      "Fuzzy file/path lookup, including dotfiles. Query is a path fragment, not a glob. If you already know the directory and filename, Read it; do not find to confirm.",
     inputSchema: {
       type: "object",
       properties: {
@@ -98,7 +98,7 @@ const TOOLS = [
     name: "grep",
     title: "Search file contents",
     description:
-      "Content search; this is not rg. regex is required: false for a literal string, true for a regular expression. After this pattern has already returned locators, do not open host Ripgrep on the same token. Pass fuzzy:true for approximate/different identifiers. Need nearby source for a hit, pass context (at most 3); this is not rg and not host Read. Returns matching lines.",
+      "Content search; this is not rg. regex is required: false for a literal string, true for a regular expression. After this pattern has already returned locators, do not open host Ripgrep on the same token. Pass fuzzy:true for approximate/different identifiers. Need nearby source for a hit, pass context (at most 3); this is not rg and not host Read. After locators are returned, do not Read hit files whole, and do not find that basename. Returns matching lines.",
     inputSchema: {
       type: "object",
       properties: {
@@ -183,7 +183,7 @@ const TOOLS = [
     name: "graph",
     title: "Explore the code graph",
     description:
-      'Identifiers, or a short question about how X works, where X is defined, or who calls / uses X. Returns an entry span, direct callees, and direct callers — a map, not an answer or source. For how-it-works, Read the entry. For who-calls or where-used, use the callers locators; do not grep that name first. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.',
+      'Identifiers, or a short question about how X works, where X is defined, or who calls / uses X. Returns an entry span, direct callees, and direct callers — a map, not an answer or source. The how-it-works entry span plus direct neighborhood is the locate; if you still Read, Read only that span, not the whole file; do not then find or grep the same name. For who-calls or where-used, use the callers locators; do not grep that name first. Bounded neighborhood, not an exhaustive callgraph. There is no callers tool.',
     inputSchema: {
       type: "object",
       properties: {

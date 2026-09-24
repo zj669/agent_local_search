@@ -8,6 +8,12 @@ import {
   rootOrigin,
   CALLEE_CAP,
   CALLER_CAP,
+  EMPTY_TOOL_MENU,
+  MCP_INSTRUCTIONS,
+  IDENTIFIER_GREP_LOCATED,
+  identifierGraphHook,
+  FIND_CONFIRM,
+  GRAPH_LOCATED,
 } from "../src/mcp-format.js";
 import { parseExploreDump, queryIdentifiers } from "../src/graph-map.js";
 
@@ -198,6 +204,8 @@ test("graph is a locator map: no source, no engine self-description", () => {
   assert.match(text, /^callers$/m);
   assert.match(text, /^src\/main\.ts:8-12 boot$/m);
   assert.doesNotMatch(text, /^callers:/m);
+  for (const line of GRAPH_LOCATED) assert.equal(text.includes(line), true);
+  assert.equal(text.includes("next: Read"), false);
 
   const payload = formatted.structuredContent;
   assert.equal(payload.truncated, false);
@@ -228,6 +236,7 @@ test("graph anchored miss does not list a fake entry", () => {
     formatted.text,
     /next: grep format_chat_details; narrow path if needed/,
   );
+  assert.equal(formatted.text.includes("located."), false);
   assert.equal(formatted.text.includes("hit:"), false);
   assert.equal(formatted.text.includes("open these files"), false);
   assert.equal(formatted.text.includes("engine ranked these instead"), false);
@@ -316,6 +325,7 @@ test("graph miss without identifiers does not invent a locator", () => {
   });
   assert.match(formatted.text, /NO exact hit/);
   assert.match(formatted.text, /next: query an identifier or "how does X work"/);
+  assert.equal(formatted.text.includes("located."), false);
   assert.deepEqual(formatted.structuredContent.entries, []);
   assert.deepEqual(formatted.structuredContent.callees, []);
   assert.deepEqual(formatted.structuredContent.callers, []);
@@ -1036,7 +1046,7 @@ test("literal grep with unescaped | or groups hints regex:true and stays 0 hits"
   assert.equal(alreadyRegex.text.includes("regex:true if"), false);
 });
 
-test("identifier grep appends a graph hook; phrases regex fuzzy and misses do not", () => {
+test("identifier grep appends a stop-loop tail and a once-only graph hook", () => {
   const hit = {
     path: "src/pkg/kinds.py",
     line: 4,
@@ -1051,12 +1061,14 @@ test("identifier grep appends a graph hook; phrases regex fuzzy and misses do no
     results: [hit],
   });
   const lines = hooked.text.trimEnd().split("\n");
-  assert.equal(lines.at(-1), "callers/callees: graph dataset_kind");
+  assert.equal(lines.at(-1), identifierGraphHook("dataset_kind"));
+  assert.equal(lines.at(-2), IDENTIFIER_GREP_LOCATED);
   assert.equal(
     lines.filter((line) => line.startsWith("callers/callees:")).length,
     1,
   );
-  assert.equal(hooked.text.includes("Read"), false);
+  assert.match(hooked.text, /do not Read the whole file/);
+  assert.equal(hooked.text.includes("next: Read"), false);
   assert.doesNotMatch(hooked.text, /^callers$/m);
 
   for (const pattern of [
@@ -1073,6 +1085,7 @@ test("identifier grep appends a graph hook; phrases regex fuzzy and misses do no
       results: [hit],
     });
     assert.equal(formatted.text.includes("callers/callees:"), false, pattern);
+    assert.equal(formatted.text.includes("located."), false, pattern);
   }
 
   const regex = formatMcpToolResult("grep", {
@@ -1084,6 +1097,7 @@ test("identifier grep appends a graph hook; phrases regex fuzzy and misses do no
     results: [hit],
   });
   assert.equal(regex.text.includes("callers/callees:"), false);
+  assert.equal(regex.text.includes("located."), false);
 
   const fuzzy = formatMcpToolResult("grep", {
     status: "ready",
@@ -1093,6 +1107,7 @@ test("identifier grep appends a graph hook; phrases regex fuzzy and misses do no
     results: [hit],
   });
   assert.equal(fuzzy.text.includes("callers/callees:"), false);
+  assert.equal(fuzzy.text.includes("located."), false);
 
   const miss = formatMcpToolResult("grep", {
     status: "ready",
@@ -1102,6 +1117,7 @@ test("identifier grep appends a graph hook; phrases regex fuzzy and misses do no
     results: [],
   });
   assert.equal(miss.text.includes("callers/callees:"), false);
+  assert.equal(miss.text.includes("located."), false);
 });
 
 test("find or-query with zero hits teaches two find calls and does not rewrite the query", () => {
@@ -1377,4 +1393,58 @@ test("find short-fragment truncation teaches fragment-first", () => {
     results: [{ path: "src/a.ts" }, { path: "src/b.ts" }],
   });
   assert.equal(complete.text.includes("short token matches widely"), false);
+});
+
+test("find confirmation teaches not to find again and is not an error", () => {
+  const byExt = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "overview.md",
+    total: 1,
+    results: [{ path: "docs/architecture/overview.md" }],
+  });
+  assert.match(byExt.text, new RegExp(`^${FIND_CONFIRM}$`, "m"));
+  assert.equal(byExt.structuredContent.truncated, false);
+  assert.equal(byExt.text.includes("isError"), false);
+
+  const byBasename = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "widget.py",
+    total: 1,
+    results: [{ path: "src/pkg/widget.py" }],
+  });
+  assert.match(byBasename.text, new RegExp(`^${FIND_CONFIRM}$`, "m"));
+
+  const fragment = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "widget",
+    total: 1,
+    results: [{ path: "src/pkg/widget.py" }],
+  });
+  assert.equal(fragment.text.includes("do not find to confirm"), false);
+
+  const miss = formatMcpToolResult("find", {
+    status: "ready",
+    root: "/repo",
+    query: "overview.md",
+    total: 0,
+    results: [],
+  });
+  assert.equal(miss.text.includes("do not find to confirm"), false);
+});
+
+test("empty tool menu and MCP instructions stop the locate loop", () => {
+  assert.match(
+    EMPTY_TOOL_MENU,
+    /Then Read only those spans, not whole files; skip Read if span \+ neighbors suffice/,
+  );
+  assert.equal(EMPTY_TOOL_MENU.includes("Then host Read the spans."), false);
+  assert.match(MCP_INSTRUCTIONS, /already located/);
+  assert.match(MCP_INSTRUCTIONS, /Host Read only the span/);
+  assert.equal(
+    MCP_INSTRUCTIONS.includes("Replies are locators. Read source with the host Read tool."),
+    false,
+  );
 });

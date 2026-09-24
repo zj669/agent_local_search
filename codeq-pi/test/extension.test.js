@@ -216,13 +216,15 @@ test("factory registers grep, find, and graph only, without querying", async () 
   assert.match(pi.tools[2].description, /There is no callers tool/);
   assert.match(pi.tools[2].description, /where X is defined/);
   assert.match(pi.tools[2].description, /who calls/);
-  assert.match(pi.tools[2].description, /For how-it-works, Read the entry/);
+  assert.match(pi.tools[2].description, /how-it-works entry span plus direct neighborhood is the locate/);
+  assert.doesNotMatch(pi.tools[2].description, /For how-it-works, Read the entry/);
   assert.doesNotMatch(pi.tools[2].description, /Read the entry first/);
   const graphGuide = pi.tools[2].promptGuidelines.join("\n");
   assert.match(graphGuide, /where X is defined/);
   assert.match(graphGuide, /who calls/);
-  assert.match(graphGuide, /how-it-works, Read the entry/);
+  assert.match(graphGuide, /how-it-works entry span plus direct neighborhood is the locate/);
   assert.doesNotMatch(graphGuide, /Read the entry first/);
+  assert.doesNotMatch(graphGuide, /For how-it-works, Read the entry/);
   assert.match(
     pi.tools[2].parameters.properties.query.description,
     /who calls/,
@@ -252,7 +254,9 @@ test("factory registers grep, find, and graph only, without querying", async () 
   assert.equal(Boolean(pi.tools[1].parameters.properties.count), true);
   assert.equal(Boolean(pi.tools[1].parameters.properties.ignoreCase), true);
   assert.match(pi.tools[1].description, /pass context \(at most 3\)/i);
+  assert.match(pi.tools[1].description, /do not Read hit files whole/);
   assert.equal(pi.tools[1].description.includes("host Ripgrep"), false);
+  assert.match(pi.tools[0].description, /do not find to confirm/);
   assert.equal(Boolean(pi.tools[0].parameters.properties.context), false);
   assert.equal(Boolean(pi.tools[2].parameters.properties.context), false);
 });

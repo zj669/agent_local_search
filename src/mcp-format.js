@@ -11,6 +11,11 @@ import {
   RANK_WINDOW,
 } from "./limits.js";
 import { identifierAt, rankFindResults, rankGrepHits } from "./path-tier.js";
+import {
+  grepExcerptWindow,
+  sidecarTailLine,
+  writeSidecar,
+} from "./sidecar.js";
 
 export const MCP_INSTRUCTIONS = `codeq is local find, grep, and graph for one repository at a time. Indexes are created automatically on first use. Never ask the user to init, never write a .codegraph directory into the project, and never merge results across repositories.
 
@@ -20,15 +25,30 @@ path only narrows this call inside the selected root; it never builds or switche
 
 Every reply's first line names the resolved absolute root and via (root argument, path argument, or cwd-derived). Read that line. When the root is not the repository you asked about — the usual cause is omitting root while working across two repositories — retry the same call with root set to that repository instead of interpreting the result.
 
-Replies are locators. Read source with the host Read tool.`;
+A successful identifier grep or exact graph already located. Do not find those basenames, do not Read whole files for neighbor lines, and do not grep or graph the same identifier again. Neighbor lines = grep context:N (cap 3). Host Read only the span, and only when locator or neighbors are not enough.`;
 
 export const EMPTY_TOOL_MENU = `codeq needs find.query, grep.pattern, or graph.query — do not call with {}.
 find: path fragment (not a glob, not "a or b").
 grep: token; regex true for a regexp, false for a literal.
-graph: one identifier (callers/callees/how-it-works). Then host Read the spans.`;
+graph: one identifier (callers/callees/how-it-works). Then Read only those spans, not whole files; skip Read if span + neighbors suffice.`;
 
 export const GREP_REGEX_REQUIRED =
   "grep needs regex: true for a regexp or false for a literal.";
+
+export const IDENTIFIER_GREP_LOCATED =
+  "located. do not find these basenames; do not Read the whole file; neighbor lines = context:N (cap 3).";
+
+export const GRAPH_LOCATED = [
+  "located. Read at most the entry span, not the whole file.",
+  "do not find these files; do not grep or graph this identifier again unless this map is wrong.",
+];
+
+export const FIND_CONFIRM =
+  "this is a path; Read it if you need the file — do not find to confirm";
+
+export function identifierGraphHook(name) {
+  return `callers/callees: graph ${String(name).trim()} — once, only if you still need callers/callees`;
+}
 
 export function requireGrepRegex(value) {
   if (typeof value !== "boolean") {
@@ -163,6 +183,24 @@ function shortFindFragment(query) {
   return text.length > 0 && !/[\s./]/.test(text);
 }
 
+function queryLooksLikeFilename(query) {
+  const text = String(query ?? "").trim();
+  return /\.[A-Za-z0-9]{1,10}(?:$|[^A-Za-z0-9])/.test(text);
+}
+
+function findBasename(path) {
+  const text = String(path || "").replace(/\\/g, "/");
+  const parts = text.split("/");
+  return parts[parts.length - 1] || "";
+}
+
+function findConfirmation(query, results) {
+  if (!results.length) return false;
+  const text = String(query ?? "").trim();
+  if (queryLooksLikeFilename(text)) return true;
+  return results.some((item) => findBasename(item.path) === text);
+}
+
 function pageCapped(result, truncated) {
   const requested = result.requestedLimit;
   const pageCap = result.pageCap ?? RANK_WINDOW;
@@ -216,10 +254,14 @@ function formatFind(result) {
     const orHint = findBooleanOrHint(query);
     if (orHint) lines.push("", orHint);
   }
+  if (findConfirmation(query, results)) {
+    lines.push("", FIND_CONFIRM);
+  }
 
   return {
     lines,
     truncated,
+    sidecarExcerpts: [],
     structured: {
       paths: uniquePaths(results.map((item) => item.path)),
       ...(result.globFallback ? { globFallback: result.globFallback } : {}),
@@ -266,6 +308,7 @@ function formatGrepCount(result) {
   return {
     lines,
     truncated,
+    sidecarExcerpts: [],
     structured: {
       hits: [],
       matchCount,
@@ -353,12 +396,19 @@ function formatGrep(result) {
     !result.regex &&
     isIdentifierPattern(pattern)
   ) {
-    lines.push(`callers/callees: graph ${String(pattern).trim()}`);
+    lines.push(IDENTIFIER_GREP_LOCATED);
+    lines.push(identifierGraphHook(pattern));
   }
+
+  const sidecarExcerpts =
+    hits.length > 0 && !result.count
+      ? display.map((hit) => grepExcerptWindow(hit)).filter(Boolean)
+      : [];
 
   return {
     lines,
     truncated,
+    sidecarExcerpts,
     structured: {
       hits: display.map((hit) => {
         const item = {
@@ -445,6 +495,7 @@ function formatGraph(result) {
         lines.push(`+${hiddenCallers.length} callers omitted`);
       }
     }
+    lines.push("", ...GRAPH_LOCATED);
   } else if (identifiers.length > 0) {
     lines.push(
       `graph "${query}" — NO exact hit on ${identifiers.join(", ")}`,
@@ -457,9 +508,19 @@ function formatGraph(result) {
     lines.push(`next: query an identifier or "how does X work"`);
   }
 
+  const sidecarExcerpts =
+    entries.length > 0
+      ? entries.map((entry) => ({
+          path: entry.path,
+          start: entry.startLine,
+          end: entry.endLine || entry.startLine,
+        }))
+      : [];
+
   return {
     lines,
     truncated,
+    sidecarExcerpts,
     structured: {
       entries: entries.map((entry) => ({
         symbol: entry.symbol,
@@ -492,6 +553,9 @@ export function formatMcpToolResult(command, result) {
         ? formatGrep(result)
         : formatGraph(result);
 
+  const sidecar = appendSidecar(command, result, formatted);
+  if (sidecar) formatted.lines.push(sidecarTailLine(sidecar));
+
   const first = freshnessLine(result);
   return {
     firstLine: first,
@@ -502,6 +566,24 @@ export function formatMcpToolResult(command, result) {
       ...formatted.structured,
     },
   };
+}
+
+function appendSidecar(command, result, formatted) {
+  const excerpts = formatted.sidecarExcerpts || [];
+  if (excerpts.length === 0 || !result?.root) return null;
+  if (command === "find") return null;
+  if (command === "grep" && result.count) return null;
+  try {
+    return writeSidecar({
+      command,
+      root: result.root,
+      query: result.query ?? result.pattern ?? "",
+      fuzzy: result.mode === "fuzzy",
+      excerpts,
+    });
+  } catch {
+    return null;
+  }
 }
 
 export { CALLEE_CAP, CALLER_CAP, FIND_CAP, GREP_CAP };
