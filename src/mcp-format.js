@@ -17,7 +17,7 @@ import {
   writeSidecar,
 } from "./sidecar.js";
 
-export const MCP_INSTRUCTIONS = `codeq is local find, grep, and graph for one repository at a time. Indexes are created automatically on first use. Never ask the user to init, never write a .codegraph directory into the project, and never merge results across repositories.
+export const MCP_INSTRUCTIONS = `codeq is local find, grep, and graph for one repository at a time. Indexes are created automatically on first use. Unused on-disk indexes are pruned later; a later search may rebuild. Never ask the user to init, never write a .codegraph directory into the project, and never merge results across repositories.
 
 Indexing starts on tools/call, never on initialize or tools/list. Prefer roots/list when the client gives a real project folder (not $HOME or /); otherwise use process.cwd() if that is a project. If the server was spawned from $HOME, pass path or root on the call. Each call uses exactly one root.
 

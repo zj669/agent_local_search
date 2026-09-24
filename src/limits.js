@@ -14,6 +14,12 @@ export const SIDECAR_MAX_BYTES = 64 * 1024;
 export const SIDECAR_FILE_MAX_BYTES = 16 * 1024;
 export const SIDECAR_TTL_MS = 15 * 60 * 1_000;
 export const SIDECAR_COUNT_CAP = 32;
+// On-disk CodeGraph buckets under dataHome()/roots/. Memory eviction (4 live
+// roots, 5 min idle) does not delete these; this is the disk reclaim policy.
+export const INDEX_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+export const INDEX_COUNT_CAP = 16;
+export const INDEX_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+export const INDEX_KEEP_HOT_MS = 30 * 60 * 1_000;
 
 export function pageLimit(requested, cap, fallback = cap) {
   if (!Number.isSafeInteger(requested) || requested <= 0) return fallback;

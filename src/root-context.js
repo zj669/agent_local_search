@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import { mkdir, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { existsSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -25,7 +25,11 @@ import {
   RANK_WINDOW,
 } from "./limits.js";
 import { applyFindWindow, applyGrepWindow } from "./path-tier.js";
-import { rootBucket } from "./paths.js";
+import {
+  ensurePrivateDir,
+  ensurePrivateFile,
+  rootBucket,
+} from "./paths.js";
 import { planFindSearch, runFindSearch } from "./find-glob.js";
 
 const require = createRequire(import.meta.url);
@@ -109,7 +113,7 @@ export class RootContext {
   }
 
   async #writeMetadata() {
-    await mkdir(this.location.bucket, { recursive: true });
+    ensurePrivateDir(this.location.bucket);
     await writeFile(
       this.location.metadata,
       `${JSON.stringify(
@@ -123,6 +127,7 @@ export class RootContext {
         2,
       )}\n`,
     );
+    ensurePrivateFile(this.location.metadata);
   }
 
   async #initializeFff() {
@@ -236,7 +241,7 @@ export class RootContext {
   }
 
   async #openGraph() {
-    await mkdir(this.location.graphDir, { recursive: true });
+    ensurePrivateDir(this.location.graphDir);
     const worker = fileURLToPath(new URL("./graph-worker.js", import.meta.url));
     this.graphProcess = spawn(
       bundledNode(),

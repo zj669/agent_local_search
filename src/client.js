@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { acquireLock } from "./lock.js";
-import { daemonPaths } from "./paths.js";
+import { daemonPaths, ensurePrivateDir } from "./paths.js";
 import { openSocket, socketIsLive } from "./socket.js";
 
 const require = createRequire(import.meta.url);
@@ -111,7 +111,7 @@ async function ensureDaemon(paths) {
 }
 
 async function launchDaemon(paths) {
-  mkdirSync(dirname(paths.log), { recursive: true });
+  ensurePrivateDir(dirname(paths.log));
   const logFd = openSync(paths.log, "a");
   const script = fileURLToPath(new URL("./daemon.js", import.meta.url));
   const packageRoot = fileURLToPath(new URL("..", import.meta.url));

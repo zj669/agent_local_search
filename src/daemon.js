@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 
 import { createServer } from "node:net";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { acquireLock } from "./lock.js";
-import { daemonPaths, resolveRequestRoot, rootBucket } from "./paths.js";
+import { indexGcOptionsFromEnv, pruneRootIndexes } from "./index-gc.js";
+import {
+  daemonPaths,
+  ensurePrivateDir,
+  resolveRequestRoot,
+  rootBucket,
+} from "./paths.js";
 import { RootContext } from "./root-context.js";
 import { socketIsLive } from "./socket.js";
 import { sweepSidecars } from "./sidecar.js";
@@ -30,9 +36,11 @@ const opening = new Map();
 const graphDirs = {};
 let lastRequestAt = Date.now();
 let shuttingDown = false;
+let pruningIndexes = false;
 
-await mkdir(paths.daemonDir, { recursive: true });
-await mkdir(dirname(paths.log), { recursive: true });
+ensurePrivateDir(paths.base);
+ensurePrivateDir(paths.daemonDir);
+ensurePrivateDir(dirname(paths.log));
 try {
   sweepSidecars();
 } catch {}
@@ -59,12 +67,35 @@ function injectGraphDir(root) {
   process.env.CODEQ_CODEGRAPH_DATA_DIRS = JSON.stringify(graphDirs);
 }
 
+function liveRootPaths() {
+  return [...roots.keys(), ...opening.keys()];
+}
+
+function pruneDiskIndexes() {
+  if (pruningIndexes) return;
+  pruningIndexes = true;
+  try {
+    const live = liveRootPaths();
+    pruneRootIndexes({
+      base: paths.base,
+      ...indexGcOptionsFromEnv(),
+      inUseRoots: live,
+      inUseKeys: live.map((root) => rootBucket(paths.base, root).key),
+    });
+  } catch {
+  } finally {
+    pruningIndexes = false;
+  }
+}
+
 async function waitForSlot() {
   while (roots.size >= ROOT_LIMIT) {
     const candidate = [...roots.values()]
       .filter((entry) => entry.active === 0)
       .sort((a, b) => a.lastAccess - b.lastAccess)[0];
     if (candidate) {
+      // Memory only: dispose drops FFF + the graph worker. The on-disk
+      // CodeGraph bucket stays until pruneDiskIndexes (TTL / LRU / size).
       roots.delete(candidate.root);
       candidate.dispose();
       delete graphDirs[candidate.root];
@@ -93,6 +124,7 @@ async function contextFor(root) {
     roots.set(root, context);
     context.startGraphIndex().catch(() => {});
     await persistRegistry();
+    pruneDiskIndexes();
     return context;
   })().finally(() => opening.delete(root));
   opening.set(root, creating);
@@ -238,6 +270,7 @@ if (outcome !== "listening") {
   process.exit(1);
 }
 await persistRegistry();
+pruneDiskIndexes();
 
 const maintenance = setInterval(() => {
   const now = Date.now();
@@ -249,6 +282,7 @@ const maintenance = setInterval(() => {
     }
   }
   process.env.CODEQ_CODEGRAPH_DATA_DIRS = JSON.stringify(graphDirs);
+  pruneDiskIndexes();
   void persistRegistry();
   if (
     now - lastRequestAt >= DAEMON_IDLE_MS &&
