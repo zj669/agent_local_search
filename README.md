@@ -102,7 +102,10 @@ order and adds `jev: { applied, skipped? }`.
 Indexes live outside the project tree (Linux
 `${XDG_DATA_HOME:-~/.local/share}/codeq`, macOS
 `~/Library/Application Support/codeq`, Windows `%LOCALAPPDATA%\codeq`). FFF is
-unpatched. CodeGraph is pinned to 1.6.0 with a data-dir patch only.
+in memory. CodeGraph is pinned to 1.6.0 with a data-dir patch only, under
+`roots/<sha>/codegraph/`. Unused per-root indexes there are pruned by age, a
+count cap, and a size budget; the next search may rebuild. That is better than
+filling the disk.
 
 ```bash
 npm uninstall -g @zj669/codeq

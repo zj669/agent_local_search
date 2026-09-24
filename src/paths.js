@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { existsSync, realpathSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+
+export const PRIVATE_DIR_MODE = 0o700;
+export const PRIVATE_FILE_MODE = 0o600;
 
 export function dataHome() {
   if (process.env.CODEQ_DATA_DIR) return resolve(process.env.CODEQ_DATA_DIR);
@@ -16,6 +19,25 @@ export function dataHome() {
     return join(process.env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "codeq");
   }
   return join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "codeq");
+}
+
+export function ensurePrivateDir(dir) {
+  mkdirSync(dir, { recursive: true, mode: PRIVATE_DIR_MODE });
+  try {
+    chmodSync(dir, PRIVATE_DIR_MODE);
+  } catch {}
+  return dir;
+}
+
+export function ensurePrivateFile(path) {
+  try {
+    chmodSync(path, PRIVATE_FILE_MODE);
+  } catch {}
+  return path;
+}
+
+export function rootsDir(base = dataHome()) {
+  return join(base, "roots");
 }
 
 export function daemonPaths(base = dataHome()) {
@@ -39,7 +61,7 @@ export function daemonPaths(base = dataHome()) {
 
 export function rootBucket(base, canonicalRoot) {
   const key = createHash("sha256").update(canonicalRoot).digest("hex");
-  const bucket = join(base, "roots", key);
+  const bucket = join(rootsDir(base), key);
   return {
     key,
     bucket,
